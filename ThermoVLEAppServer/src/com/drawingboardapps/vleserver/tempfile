@@ -1,0 +1,4364 @@
+      PROGRAM MAIN
+      IMPLICIT REAL*8 (A-H,O-Z)
+      REAL*8 KIJ,MW,MWI,MWF,LDEN,SGC,MWhc
+      CHARACTER*9 NAM(50)
+!      CHARACTER*15 INPUT,OUTPUT
+      PARAMETER(RG=8.314D-5)
+      DIMENSION X(50),Y(50),Z(50),W(50),Hmm(3)
+      DIMENSION MW(50),TB(50),TC(50),PC(50),VC(50),AC(50),KIJ(50,50)
+      DIMENSION NQ(10),SGC(10),MWI(10),MWF(10),AVG(10),VAR2(10),ETA(10)
+      DIMENSION XQP(20),WFC(20),ZC(50),QSG(20),SG(50),ZHC(50)
+      DIMENSION LDEN(50),TDEN(50),DEN(50),ZRA(50),zbs(5)
+      dimension zgas(50)
+!     parameters for asphaltene
+      dimension armmw(3),armden(3),zeta(3),xar0(3),xar1(3),xar2(3)
+!
+      EXTERNAL QUAD,TWU,FLASH,BUDET,BUDEP,DENSITY,LLE
+      data sigaf/15.d0/,cla/1.0d0/,clr/10.d0/,sigrs/5.d0/,
+     &     akapa/5.0d-2/,AAR/1.0d0/
+
+!
+! name of input data file
+      WRITE(*,1)
+1     FORMAT(2X,' INPUT FILE=')
+!      READ(*,2) INPUT
+2     FORMAT(A)
+
+! name of output file
+      WRITE(*,3)
+3     FORMAT(2X,' OUTPUT FILE=')
+c      READ(*,2) OUTPUT
+      open (4,file='/Users/Tricknology/Desktop/FlashDrive
+     &/ProgrammingStuff/Thermo/ThermoInOut/OUTPUT2')
+      WRITE(4,*)
+      WRITE(4,105)
+
+! read input data
+      open (5,file='/Users/Tricknology/Desktop/FlashDrive
+     &/ProgrammingStuff/Thermo/ThermoInOut/input2.txt')
+      read(5,*)INDEX
+      read(5,*) ndis
+      do i=1,ndis
+      READ(5,2) NAM(i)
+      read(5,*) MW(i),TB(i),TC(i),PC(i),VC(i),AC(i),LDEN(i),TDEN(i),
+     &          ZRA(I)
+      enddo
+      read(5,*) ncon
+      do i=1,ncon
+      read(5,*) NQ(i),SGC(i),MWI(i),MWF(i),AVG(i),VAR2(i)
+      enddo
+      read(5,*)T,P
+      read(5,*)(z(i),i=1,ndis)
+      
+!      read(5,*)(eta(i),i=1,ncon) 
+!     read(5,*)asflmw,resnmw,asflden,resnden,zeta(1),zeta(2),AAN
+!      read(5,*)sgoil,amwoil,wfa,wfr
+!      NT=NCON+NDIS
+!      IF(NT.LT.1) GOTO 800
+
+!
+
+! theta is the parameter of Chueh-Prausnitz correlation for kij
+!      read(5,*) theta
+! CHECK FEED MOLE FRACTIONS SUM TO ONE
+      SZ = 0.D0
+      DO I=1,NDIS
+      SZ = SZ + Z(I)
+      ENDDO
+      DO I=1,NCON
+      SZ = SZ + ETA(I)
+      ENDDO
+      IF (DABS(SZ-1.D0) .GT. 0.001D0) GO TO 110
+
+! SETUP MOL. WTS. AND QUADRATURE POINTS FOR CONTINUOUS FRACTIONS
+! ESTIMETE CRITICAL PROPERTIES FROM TWU'S CORRELATION
+      N=NDIS
+      DO 10 I=1,NCON
+      CALL
+     & QUAD(MWI(I),MWF(I),AVG(I),VAR2(I),NQ(I),XQP,WFC,SGC(I),QSG)
+         DO J=1,NQ(I)
+         N=N+1
+         MW(N)=XQP(J)
+         Z(N)=ETA(I)*WFC(J)
+!         TDEN(N)=298.15D0
+         SG(N)=QSG(J)
+         CALL
+     &  TWU(MW(N),TB(N),SG(N),TC(N),PC(N),VC(N),AC(N),LDEN(N),TDEN(N))
+         ZC(N)=PC(N)*VC(N)*1.0D-6/(RG*TC(N))
+         ENDDO
+10    CONTINUE
+
+! average molecular weight and renormalized mole fractions
+      NTOT=N
+      SZ=0.0D0
+      AMW=0.0D0
+      DO I=1,NTOT
+      SZ=SZ+Z(I)
+      ENDDO
+      DO I=1,NTOT
+      Z(I)=Z(I)/SZ
+      AMW=AMW+Z(I)*MW(I)
+      ENDDO
+
+! output critical properties for Peng-Robinson equation of state
+      WRITE(4,120)
+      DO I=1,NDIS
+      WRITE(4,121) NAM(I),MW(I),TB(I),TC(I),PC(I),AC(I)
+      ENDDO
+      IF (NCON.GT.0) THEN
+      WRITE(4,122)
+      N=NDIS
+      DO 20 I=1,NCON
+      WRITE(4,*)
+      WRITE(4,*) '      CONTINUOUS FRACTION',I
+      WRITE(4,*)
+      DO 20 J=1,NQ(I)
+      N=N+1
+      WFX=Z(N)/ETA(I)
+      WRITE(4,123) MW(N),WFX,TB(N),TC(N),PC(N),AC(N),ZC(N),VC(N),LDEN(N)
+20    CONTINUE
+      ELSE
+      ENDIF
+
+! set binary interaction parameters
+      call setkij(NTOT,THETA,VC,KIJ)
+! output kij matrix for PR-EOS
+      WRITE(4,*)
+      WRITE(4,*) 'KIJ MATRIX'
+      DO I=1,NTOT
+      WRITE(4,30) (KIJ(I,J),J=1,NTOT)
+      ENDDO
+30    FORMAT(2X,20(F4.2,1X))
+
+! input task
+      WRITE(4,*)
+      WRITE(*,*) 'Type 1 for gas solubility at given T,P'
+      WRITE(*,*) '     2 for isothermal VLE flash calculation'
+      WRITE(*,*) '     3 for dew-point temperature calculation'
+      WRITE(*,*) '     4 for bubble-point temperature calculation'
+      WRITE(*,*) '     5 for bubble-point pressure calculation'
+      WRITE(*,*) '     6 for dew-point pressure calculation'
+      WRITE(*,*) '     7 for liquid-density calculation'
+      WRITE(*,*) '     8 for asphaltene precipitation'
+      WRITE(*,*) '     9 for asphaltene precipitation(VLE flash first)'
+!      READ(*,*) INDEX
+
+      GO TO (100,200,300,400,500,600,700,800,900), INDEX
+
+! calculate gas solubility in a liquid mixture at given T, P
+! by try and error method
+
+100   DO I=1,NTOT
+      ZGAS(I)=0.0D0
+      ENDDO
+
+! read gas composition
+40    read(5,*) (zgas(i),i=1,ndis)
+! GIVEN AN GAS COMPOSITION SUCH THAT THE SYSTEM IS UNSTABLE, i.e.,VLE EXIST
+      GMF=0.8D0
+      DO I=1,NTOT
+      Z(I)=Z(I)*(1.0D0-GMF)*GMF*ZGAS(I)
+      ENDDO
+
+      CALL FLASH(T,P,NTOT,TC,PC,AC,KIJ,Z,X,Y,VL,VV,FV)
+      CALL DENSITY(NTOT,X,T,P,MW,TC,PC,VC,AC,KIJ,LDEN,TDEN,ZRA,
+     &                   DEN,DENM,VOL)
+      WRITE(4,150)
+      WRITE(4,202) P,T,FV,VOL,DENM
+      WRITE(4,203)
+      DO I=1,NDIS
+      WRITE(4,204) NAM(I),Z(I),Y(I),X(I)
+      ENDDO
+      WRITE(4,*)
+      IF(NCON.GT.0) THEN
+          N=NDIS
+          DO J=1,NCON
+          WRITE(4,*)
+          WRITE(4,*) 'CONTINUOUS FRACTIONS',J
+          WRITE(4,*)
+          DO K=1,NQ(J)
+          N=N+1
+          WRITE(4,205) Z(N),Y(N),X(N)
+          ENDDO
+          ENDDO
+      ELSE
+      ENDIF
+      WRITE(4,112)
+      GOTO 1000
+
+
+! isothermal VLE flash calculation
+200   CALL FLASH(T,P,NTOT,TC,PC,AC,KIJ,Z,X,Y,VL,VV,FV)
+      CALL DENSITY(NTOT,X,T,P,MW,TC,PC,VC,AC,KIJ,LDEN,TDEN,ZRA,
+     &                   DEN,DENM,VOL)
+      WRITE(4,201)
+      WRITE(4,202) P,T,FV,VOL,DENM
+      WRITE(4,203)
+      DO I=1,NDIS
+      WRITE(4,204) NAM(I),Z(I),Y(I),X(I)
+      ENDDO
+      WRITE(4,*)
+      IF(NCON.GT.0) THEN
+          N=NDIS
+          DO J=1,NCON
+          WRITE(4,*)
+          WRITE(4,*) 'CONTINUOUS FRACTIONS',J
+          WRITE(4,*)
+          DO K=1,NQ(J)
+          N=N+1
+          WRITE(4,205) Z(N),Y(N),X(N)
+          ENDDO
+          ENDDO
+      ELSE
+      ENDIF
+      WRITE(4,112)
+      GOTO 1000
+
+! dew-point temperature calculation
+300   CALL BUDET(2,T,P,NTOT,TB,TC,PC,AC,KIJ,Z,W,VL,VV)
+      CALL DENSITY(NTOT,W,T,P,MW,TC,PC,VC,AC,KIJ,LDEN,TDEN,ZRA,
+     &                   DEN,DENM,VOL)
+      WRITE(4,301)
+      WRITE(4,302) P,T,VV,DENM
+      WRITE(4,303)
+      DO I=1,NDIS
+      WRITE(4,304) NAM(I),Z(I),W(I)
+      ENDDO
+      WRITE(4,*)
+      IF(NCON.GT.0) THEN
+      WRITE(4,*) '         CONTINUOUS FRACTIONS'
+      DO I=NDIS+1,NTOT
+      WRITE(4,305) Z(I),W(I)
+      ENDDO
+      ELSE
+      ENDIF
+      WRITE(4,112)
+      GOTO 1000
+
+! bubble-point temperature calculation
+400   CALL BUDET(1,T,P,NTOT,TB,TC,PC,AC,KIJ,Z,W,VL,VV)
+      CALL DENSITY(NTOT,Z,T,P,MW,TC,PC,VC,AC,KIJ,LDEN,TDEN,ZRA,
+     &                   DEN,DENM,VOL)
+      WRITE(4,401)
+      WRITE(4,302) P,T,VV,DENM
+      WRITE(4,303)
+      DO I=1,NDIS
+      WRITE(4,304) NAM(I),W(I),Z(I)
+      ENDDO
+      WRITE(4,*)
+      IF(NCON.GT.0) THEN
+      WRITE(4,*) '         CONTINUOUS FRACTIONS'
+      DO I=NDIS+1,NTOT
+      WRITE(4,305) W(I),Z(I)
+      ENDDO
+      ELSE
+      ENDIF
+      WRITE(4,112)
+      GOTO 1000
+
+! bubble-point pressure calculation
+500   CALL BUDEP(1,T,P,N,TB,TC,PC,AC,KIJ,Z,Y,VL,VV)
+      CALL DENSITY(NTOT,Z,T,P,MW,TC,PC,VC,AC,KIJ,LDEN,TDEN,ZRA,
+     &                   DEN,DENM,VOL)
+      WRITE(4,501)
+      WRITE(4,502) T,P,VV,DENM
+      WRITE(4,303)
+      DO I=1,NDIS
+      WRITE(4,304) NAM(I),Y(I),Z(I)
+      ENDDO
+      WRITE(4,*)
+      IF(NCON.GT.0) THEN
+      WRITE(4,*) '         CONTINUOUS FRACTIONS'
+      DO I=NDIS+1,NTOT
+      WRITE(4,305) Y(I),Z(I)
+      ENDDO
+      ELSE
+      ENDIF
+      WRITE(4,112)
+      GOTO 1000
+
+! dew-point pressure calculation
+600   CALL BUDEP(2,T,P,N,TB,TC,PC,AC,KIJ,X,Z,VL,VV)
+      CALL DENSITY(NTOT,X,T,P,MW,TC,PC,VC,AC,KIJ,LDEN,TDEN,ZRA,
+     &                   DEN,DENM,VOL)
+      WRITE(4,601)
+      WRITE(4,502) T,P,VV,DENM
+      WRITE(4,303)
+      DO I=1,NDIS
+      WRITE(4,304) NAM(I),Z(I),X(I)
+      ENDDO
+      WRITE(4,*)
+      IF(NCON.GT.0) THEN
+      WRITE(4,*)
+      WRITE(4,*) '        CONTINUOUS FRACTIONS'
+      DO I=NDIS+1,NTOT
+      WRITE(4,305) Z(I),X(I)
+      ENDDO
+      ELSE
+      ENDIF
+      WRITE(4,112)
+      GOTO 1000
+
+c liquid density calculation
+700   CALL DENSITY(NTOT,Z,T,P,MW,TC,PC,VC,AC,KIJ,LDEN,TDEN,ZRA,
+     &                   DEN,DENM,VOL)
+      WRITE(4,701)
+      WRITE(4,702) T,P,DENM
+      WRITE(4,703) (Z(i),i=1,NTOT)
+      GOTO 1000
+
+c Asphaltene precipitation(liquid-liquid equilibrium)
+800   continue
+c molecular weight and density of asphaltene, resin, (dalton, g/ml)
+      armmw(1)=asflmw
+      armmw(2)=resnmw
+      armden(1)=asflden
+      armden(2)=resnden
+
+c mole fractions of asphaltene and resin, and medium, xar0(3)
+      xar0(1)=amwoil*wfa/armmw(1)
+      xar0(2)=amwoil*wfr/armmw(2)
+      xar0(3)=1.d0-xar0(1)-xar0(2)
+
+      sumzhc=0.0d0
+      do i=5,NTOT
+      sumzhc=sumzhc+Z(i)
+      enddo
+      zhc(1)=0.0d0
+      zhc(2)=0.0d0
+      zhc(3)=0.0d0
+      zhc(4)=0.0d0
+      do i=1,4
+      zbs(i)=z(i)
+      enddo
+      zbs(5)=sumzhc
+      MWhc=0.0d0
+      do i=5,NTOT
+      zhc(i)=Z(i)/sumzhc
+      MWhc=MWhc+zhc(i)*MW(i)
+      enddo
+
+c Using Daubert's correlation for density of crude oil,
+c the critical properties are from Twu's correlation.
+c      CALL TWU(amwoil,Tboil,sgoil,TCoil,PCoil,VCoil,ACoil,denoil,Toil)
+C
+      CALL DENSITY(NTOT,Z,T,P,MW,TC,PC,VC,AC,KIJ,LDEN,TDEN,ZRA,
+     &                   DEN,DENM,VOL)
+      WRITE(4,701)
+      WRITE(4,702) T,P,DENM
+c      WRITE(4,703) (Z(i),i=1,NTOT)
+      denoil=denm
+c average molecular weight of asphaltene containing liquid, amwarm
+      amwarm=0.0d0
+      do i=1,ntot
+      amwarm=amwarm+Z(i)*mw(i)
+      enddo
+      denarm=denm
+c average molecular weight, and density of medium (dalton, g/ml)
+      armmw(3)=(amwarm-xar0(1)*armmw(1)-xar0(2)*armmw(2))/xar0(3)
+      armden(3)=xar0(3)*armmw(3)/
+     & (amwarm/denarm-xar0(1)*armmw(1)/armden(1)
+     &               -xar0(2)*armmw(2)/armden(2))
+
+      call
+     & LLE(T,armmw,armden,MWhc,zbs,zeta,AAN,xar0,xar1,xar2,fl1
+     &      ,ppa,ppr,vpp,Hmm)
+
+c output calculated result on asphaltene precipitation
+      write(4,801)
+      write(4,807)
+      write(4,808) asflmw,resnmw,asflden,resnden,sigaf,sigrs,cla,clr
+      write(4,809) AAN,AAR,zeta(1),zeta(2),zeta(3),Hmm(1),Hmm(2),akapa
+      write(4,810) armmw(3),armden(3),Hmm(3)
+      write(4,802) P,T
+      write(4,803) ppa,ppr,vpp
+      write(4,804)
+      write(4,805) (xar0(i),xar1(i),xar2(i),i=1,3)
+      write(4,806) fl1
+      GOTO 1000
+
+c Asphaltene precipitation following VLE flash calculation
+900   CALL FLASH(T,P,NTOT,TC,PC,AC,KIJ,Z,X,Y,VL,VV,FV)
+      CALL DENSITY(NTOT,X,T,P,MW,TC,PC,VC,AC,KIJ,LDEN,TDEN,ZRA,
+     &                   DEN,DENM,VOL)
+c overall density of asphaltene containing liquid phase, denarm
+      denarm=denm
+
+c output flash calculation results
+      WRITE(4,201)
+      WRITE(4,202) P,T,FV,VOL,DENM
+      WRITE(4,203)
+      DO I=1,NDIS
+      WRITE(4,204) NAM(I),Z(I),Y(I),X(I)
+      ENDDO
+      WRITE(4,*)
+      IF(NCON.GT.0) THEN
+          N=NDIS
+          DO J=1,NCON
+          WRITE(4,*)
+          WRITE(4,*) 'CONTINUOUS FRACTIONS',J
+          WRITE(4,*)
+          DO K=1,NQ(J)
+          N=N+1
+          WRITE(4,205) Z(N),Y(N),X(N)
+          ENDDO
+          ENDDO
+      ELSE
+      ENDIF
+      WRITE(4,112)
+
+
+c average molecular weight of asphaltene containing liquid, amwarm
+      amwarm=0.0d0
+      do i=1,ntot
+      amwarm=amwarm+x(i)*mw(i)
+      enddo
+
+c total number of moles in the liquid
+      totmol=1.0d0-FV
+
+c molecular weight and density of asphaltene, resin
+      armmw(1)=asflmw
+      armmw(2)=resnmw
+      armden(1)=asflden
+      armden(2)=resnden
+
+c mole fractions of asphaltene and resin,and medium, xar(3)
+c Here wfa, wfr are the weight fractions of A & R in crude oil
+c  multiplied by the initial mole fraction of the crude oil. Therefore,
+c amwoil is still the molecular weightof the crude oil.
+      xar0(1)=amwoil*wfa/armmw(1)/totmol
+      xar0(2)=amwoil*wfr/armmw(2)/totmol
+      xar0(3)=1.d0-xar0(1)-xar0(2)
+
+c average molecular weight, and density of medium (dalton, g/ml)
+      armmw(3)=(amwarm-xar0(1)*armmw(1)-xar0(2)*armmw(2))/xar0(3)
+      armden(3)=xar0(3)*armmw(3)/
+     & (amwarm/denarm-xar0(1)*armmw(1)/armden(1)
+     &               -xar0(2)*armmw(2)/armden(2))
+
+      sumzhc=0.0d0
+      do i=4,NTOT
+      sumzhc=sumzhc+x(i)
+      enddo
+      zhc(1)=0.0d0
+      zhc(2)=0.0d0
+      zhc(3)=0.0d0
+      zhc(4)=0.0d0
+      do i=1,4
+      zbs(i)=x(i)
+      enddo
+      zbs(5)=sumzhc
+      MWhc=0.0d0
+      do i=5,NTOT
+      zhc(i)=x(i)/sumzhc
+      MWhc=MWhc+zhc(i)*MW(i)
+      enddo
+
+c solve liquid-liquid equilibrium
+      call
+     & LLE(T,armmw,armden,MWhc,zbs,zeta,AAN,xar0,xar1,xar2,fl1
+     &     ,ppa,ppr,vpp,Hmm)
+
+c output calculated result on asphaltene precipitation
+      write(4,801)
+      write(4,807)
+      write(4,808) asflmw,resnmw,asflden,resnden,sigaf,sigrs,cla,clr
+      write(4,809) AAN,AAR,zeta(1),zeta(2),zeta(3),Hmm(1),Hmm(2),akapa
+      write(4,810) armmw(3),armden(3),Hmm(3)
+      write(4,802) P,T
+      write(4,803) ppa,ppr,vpp
+      write(4,804)
+      write(4,805) (xar0(i),xar1(i),xar2(i),i=1,3)
+      write(4,806) fl1
+      GOTO 1000
+
+105   FORMAT(79('*')/20X,'PHASE-EQUILIBRIA PROGRAM FOR'
+     &   ,' HEAVY CRUDE OIL'//79('*'))
+110   WRITE(4,111)
+111   FORMAT(1X,'INITIAL FEED MOLE FRACTIONS DO NOT SUM TO UNITY'/
+     *       1X,'PROGRAM HALTED IN MAIN')
+112   FORMAT(1X,79('*'))
+120   FORMAT(/5x,'Crude Oil Characterization'
+     *//6X,'DISCRETE COMPONENTS'
+     */18X,'NAME',7X,'MOL WT',4X,'TB, K',4X,
+     *'  TC, K',4X,'PC, BAR',6X,'W'/15X,60('-'))
+121   FORMAT(16X,A9,4X,F6.2,4X,F6.2,4X,F6.2,4X,F6.2,4X,F6.4)
+122   FORMAT(/5X,'CONTINUOUS COMPONENTS'
+     *//4X,'MOL WT',4X,'WFC ',2X,'TB, K',1X,
+     *'  TC, K',3X,'PC, BAR',5X,'W',6X,'ZC',6X,'VC',3X,'d,g/cm^3'
+     *  /4X,75('-'))
+123   FORMAT(4X,F6.2,2X,F6.4,2X,F6.2,2X,F6.2,2X,F7.2,2(2X,F6.4),2X,
+     * F7.2,2X,F6.4)
+130   FORMAT(/6X,'INTERACTION PARAMETERS'/)
+131   FORMAT(11X,A9,3X,'-',2X,A9,4X,'= ',F8.5)
+132   FORMAT(11X,A9,3X,'-',2X,'CONTINUOUS',I2,' = ',F6.3,' +',E10.3,
+     *' EXP(',E10.3,'*MW)')
+133   FORMAT(11X,'CONTINUOUS',I2,' - CONTINUOUS',I2,' = ',F7.4)
+150   FORMAT(1X,79('*')//20X,'RESULTS OF GAS SOUBILITY CALCULATION'/
+     *//1X,79('*')/)
+201   FORMAT(1X,79('*')//20X,'RESULTS OF ISOTHERMAL-FLASH CALCULATION'/
+     */1X,79('*')/)
+202   FORMAT(16X,'SPECIFIED:',3X,'PRESSURE',12X,F7.3,2X,'BAR'/
+     *29X,'TEMPERATURE',9X,F7.3,2X,'K'//
+     *16X,'CALCULATED:',2X,'VAPORIZED FRACTION',2X,F7.5/
+     *29X,'LIQUID VOULME',7X,F8.4,2X,'CM3/MOL'/
+     *29X,'LIQUID DENSITY',6X,F8.4,2X,'G/CM3'/1X,78('=')/)
+203   FORMAT(5X,'MOLE FRACTIONS'/11X,'COMPONENT',11X,'FEED',11X,
+     *'VAPOR',11X,'LIQUID'/8X,72('-'))
+204   FORMAT(10X,A9,7X,E12.5,4X,E12.5,4X,E12.5)
+205   FORMAT(19X,7X,E12.5,4X,E12.5,4X,E12.5)
+
+301   FORMAT(1X,79('*')//22X,'RESULTS OF DEW-TEMPERATURE CALCULATION'
+     *//1X,79('*')/)
+302   FORMAT(16X,'SPECIFIED:',3X,'PRESSURE',12X,F7.3,2X,'BAR'//
+     *16X,'CALCULATED:',2X,'TEMPERATURE',9X,F7.3,2X,'K'/
+     *29X,'VAPOR VOLUME',7X,F8.2,2X,'CM3/MOL'/
+     *29X,'LIQUID DENSITY',6X,F8.4,2X,'G/CM3'//1X,78('=')/)
+303   FORMAT(33X,'MOLE FRACTIONS'//11X,'COMPONENT',11X,
+     *'VAPOR',11X,'LIQUID'/8X,72('-'))
+304   FORMAT(10X,A9,7X,E12.5,4X,E12.5)
+305   FORMAT(19X,7X,E12.5,4X,E12.5)
+401   FORMAT(1X,79('*')//22X,
+     *'RESULTS OF BUBBLE-TEMPERATURE CALCULATION'
+     *//1X,79('*')/)
+501   FORMAT(1X,79('*')//22X,'RESULTS OF BUBBLE-PRESSURE CALCULATION'
+     *//1X,79('*')/)
+502   FORMAT(16X,'SPECIFIED:',3X,'TEMPERATURE',12X,F7.3,2X,'K'//
+     *16X,'CALCULATED:',2X,'PRESSURE',13X,F7.3,2X,'BAR'/
+     *29X,'VAPOR VOLUME',5X,F10.2,2X,'CM3/MOL'/
+     *29X,'LIQUID DENSITY',6X,F8.4,2X,'G/CM3'//1X,78('=')/)
+601   FORMAT(1X,79('*')//22X,'RESULTS OF DEW-PRESSURE CALCULATION'
+     *//1X,79('*')/)
+701   FORMAT(1X,79('*')//22X,'RESULTS OF LIQUID-DENSITY CALCULATION'
+     *//1X,79('*')/)
+702   FORMAT(16X,'SPECIFIED:',3X,'TEMPERATURE',12X,F7.3,2X,'K'/
+     *29X,'PRESSURE',13X,F7.3,2X,'BAR'//
+     *18X,'CALCULATED LIQUID DENSITY',7X,F8.4,2X,'G/CM3'//1X,78('=')/)
+703   FORMAT(8(F6.4,2X))
+801   format(18x,//18x,'Calculated Results on Asphaltene Precipitation'
+     &            //1x,79('*'))
+802   FORMAT(5X,'SPECIFIED:',3X,'PRESSURE',F7.2,'BAR,',
+     &       3X,'TEMPERATURE',F7.2,'K'/)
+803   format(2x,'Fraction of asphaltene precipitated,     ',f8.6/
+     &       2x,'Fraction of resin precipitated,          ',f8.6/
+     &       2x,'Volume precipitated(A+R) cm^3/mole of oil',f8.6)
+804   format(/7x,'mole fractions   feed',12x,'liquid-I      liquid-II')
+805   format(5x,'Asphaltene       ',f8.6,9x,f8.6,9x,f8.6/
+     &       5x,'Resin            ',f8.6,9x,f8.6,9x,f8.6/
+     &       5x,'Solvent (medium) ',f8.6,9x,f8.6,9x,f8.6//2X,75('-'))
+806   format(2x,'Total mole fraction in the phase Liquid-I',f8.6)
+807   format(/4x,'Model Parameters'/2X,75('-')/
+     &       40x,'Asphaltene',6x,'Resin')
+808   format(5x,'Molecular Weight, Dalton ',10x,f6.1,10x,f6.1
+     &      /5x,'Density g/cm^3           ',10x,f6.2,10x,f6.2
+     &      /5x,'Segment Diameter,A       ',10x,f6.2,10x,f6.2
+     &      /5x,'Number of Segments       ',10x,f6.0,10x,f6.0)
+809   format(5x,'Number of Association Sites',8x,f6.2,10x,f6.2
+     &      /5x,'Association Energy/kT(298.15)',6x,f6.2,10x,f6.2,5x,f6.2
+     &      /5x,'Hamaker constant/kT(298.15)',8x,f6.2,10x,f6.2
+     &      /5x,'kapa(SAFT)                 ',8x,f6.2)
+810   format(5x,'Molecular Weight of Medium     ',4x,f6.2
+     &      /5x,'Density of the Medium          ',4x,f6.2
+     &      /5x,'Hamaker constant of the Medium ',4x,f6.2/2X,75('-'))
+      CLOSE(4)
+      CLOSE(5)
+1000  CONTINUE
+      END
+
+      subroutine setkij(ntot,theta,vc,kij)
+      IMPLICIT REAL*8 (A-H,O-Z)
+      real*8 kij(50,50),vc(50)
+C setup binary interaction parameters
+      DO 20 I=1,NTOT
+      DO 20 J=I,NTOT
+C THIS CORRELATION IS FOR HYDROCARBONS
+      THIRD=1.0D0/3.0D0
+      SIXTH=1.0D0/6.0D0
+      VCIJ=2.0d0*(VC(I)*VC(J))**SIXTH/(VC(I)**THIRD+VC(J)**THIRD)
+      KIJ(I,J)=1.0d0-VCIJ**THETA
+20    KIJ(J,I)=KIJ(I,J)
+
+c set kij for heavy hydrocarbons-N2(1), and heavy hydrocarbons-CO2(2)
+      DO I=12,NTOT
+      KIJ(1,I)=0.120D0
+      KIJ(2,I)=0.095d0
+      KIJ(I,1)=KIJ(1,I)
+      KIJ(I,2)=KIJ(2,I)
+      ENDDO
+
+c set kij among light hydrocarbons, N2,CO2
+      KIJ(1,2)=-0.02D0
+      KIJ(1,4)=0.031D0
+      KIJ(1,5)=0.042D0
+      KIJ(1,6)=0.091D0
+      KIJ(1,7)=0.095D0
+      KIJ(1,8)=0.095D0
+      KIJ(1,9)=0.095D0
+      KIJ(1,10)=0.095D0
+      KIJ(1,11)=0.120D0
+      DO I=4,11
+      KIJ(I,1)=KIJ(1,I)
+      ENDDO
+
+      KIJ(2,1)=-0.02D0
+      KIJ(2,4)=0.103D0
+      KIJ(2,5)=0.130D0
+      KIJ(2,6)=0.135D0
+      KIJ(2,7)=0.130D0
+      KIJ(2,8)=0.130D0
+      KIJ(2,9)=0.125D0
+      KIJ(2,10)=0.125D0
+      KIJ(2,11)=0.15D0
+
+      DO I=4,11
+      KIJ(I,2)=KIJ(2,I)
+      ENDDO
+
+c kij between H2S and hydrocarbons, N2,CO2
+      KIJ(3,1)=0.1767D0
+      KIJ(3,2)=0.0974D0
+      KIJ(3,4)=0.0800D0
+      KIJ(3,5)=0.0833D0
+      KIJ(3,6)=0.088D0
+      KIJ(3,7)=0.047D0
+      KIJ(3,8)=0.047D0
+      KIJ(3,9)=0.063D0
+      KIJ(3,10)=0.063D0
+      DO I=11,NTOT
+      KIJ(3,I)=0.08D0
+      ENDDO
+
+      DO I=1,NTOT
+      KIJ(I,3)=KIJ(3,I)
+      KIJ(I,I)=0.0d0
+      ENDDO
+
+      return
+      end
+
+      subroutine
+     &LLE(T,mw,den,MWhc,zbs,zeta,AAN,xar0,xar1,xar2,fl1,ppa,ppr,vpp,Hmm)
+c
+c Asphaltene precipitation as liquid-liquid equilibrium;
+c T: temperature, K;
+C mw(3): molecular weight of A,R and medium;
+c den(3): density (g/ml) of asphaltene,resin amd medium;
+c zeta(3): association energy/kT between A-A,  between A-R, and between R-R;
+c AAN: Number of sites at one Asphaltene molecule;
+c xar0(3): mole fractions of asphaltene,resin and medium before phase separation;
+c ppa: percent of asphaltene precipitate;
+c:ppr: percent of resin percipitate;
+c Bs=pi**2*B*(Nav*10**6)**2/298.15*kB
+c Hmm, Hamaker constat of the medium
+c
+      implicit real*8 (a-h,o-z)
+      logical check
+      REAL*8  XSA,LB,UB,XOPT,mw,MWhc
+      parameter(nbr=3,NSA=2)
+      dimension xbr(nbr),fvec(nbr),amax(nbr),amin(nbr)
+      dimension LB(NSA),UB(NSA),XSA(NSA),XOPT(NSA)
+      dimension Hm(3),Aeps(3),cp0(2),CP(2),mw(3),vol(3),den(3),y(2)
+      dimension zeta(3),xar0(3),xar1(3),xar2(3),Bs(5),zbs(5),Hmm(3)
+      common /PARA/ Hm,Aeps,r12,cl,sigrs,aras,akapa,y
+      common /feed/ vol,Posm0,Posm,cp0,CP,Z,G
+      common /solver/ xa0,xr0,amin,amax
+      data r12/3.d0/,cl/10.d0/,sigrs/5.d0/,akapa/5.0d-2/
+c from London's theory
+      data Bs(1)/4.928516d3/,Bs(2)/1.218909d4/,Bs(3)/1.63079d4/,
+     &     Bs(4)/8.78457d3/
+c           N2,  methane,                   CO2            H2S
+
+      PI=3.141592653589793d0
+
+c mole fraction of asphaltene, resin and medium
+      xa0=xar0(1)
+      xr0=xar0(2)
+      xs0=xar0(3)
+
+c number of association sites per asphaltene molecule
+      aras=AAN
+
+c association energy/kT
+      Aeps(1)=zeta(1)*298.15d0/T
+      Aeps(2)=zeta(2)*298.15d0/T
+      Aeps(3)=zeta(3)*298.15d0/T
+
+c diameter of asphaltene molecule, in A
+      siga=sigrs*r12
+
+c packing fraction of pure asphaltene, pure resin
+      y(1)=0.31531834d0*den(1)*siga**3/mw(1)
+      y(2)=0.31531834d0*den(2)*sigrs**3*cl/mw(2)
+
+      Bs(5)=22.097d0*MWhc**2
+      Bm=0.0d0
+      do i=1,5
+        do j=1,5
+        Bm=Bm+zbs(i)*zbs(j)*dsqrt(Bs(i)*Bs(j))
+        enddo
+      enddo
+c Hamaker constants of pure asphaltene, pure resin and medium
+c den: density in g/cm^3, Hm: H/kT
+      Hm(1)=den(1)**2*22.097d0*298.15d0/T
+      Hm(2)=den(2)**2*22.097d0*298.15d0/T
+      Hm(3)=(den(3)/mw(3))**2*Bm*298.15d0/T
+      Hmm(3)=Hm(3)*T/298.15
+      Hmm(1)=Hm(1)*T/298.15
+      Hmm(2)=Hm(2)*T/298.15
+      Hmp=den(3)**2*22.097d0*298.15d0/T
+c   write(*,*) 'compare',Hmp,Hm(3),Bm,zbs(2),Bs(2),zbs(4),Bs(4)
+c molecular volume. nm^3(molar volume/NAV)
+      do i=1,3
+      vol(i)=mw(i)/den(i)/0.6022d3
+      enddo
+
+Cc stability analysis
+c set limits
+      DO I=1,NSA
+      LB(I)=0.0d0
+      UB(I)=1.D0
+      ENDDO
+
+c initilize feed condition
+      XSA(1)=xa0
+      XSA(2)=xr0
+      call FCN(NSA,XSA,FSA)
+      CP0(1)=CP(1)
+      CP0(2)=CP(2)
+      Posm0=Posm
+      Z0=Z
+
+c call simulated annealing
+      call SACAL(XSA,LB,UB,XOPT)
+
+      call FCN(NSA,XSA,FSA)
+      WRITE(*,100)  XOPT(1),XOPT(2),FSA
+c      WRITE(*,*) CP0,Posm0,CP,Posm,Z0
+
+c solve liquid-liquid equilibrium
+c set limits for mole fractions and phase-fraction
+      do i=1,3
+      amin(i)=0.0d0
+      enddo
+      amax(1)=xa0
+      amax(2)=xr0
+      amax(3)=xs0
+c total mole fraction in liquid-1
+c      fl1=0.005
+c      FL1=0.001
+      fl1=xA0*0.5d0/xopt(1)
+c      write(*,*) 'fl1=',fl1
+c initial guess, moles in liquid-1
+      xa1=xopt(1)*fl1
+      xr1=xopt(2)*fl1
+      xs1=(1.0d0-xopt(1)-xopt(2))*fl1
+      if(xa1.gt.amax(1).or.xr1.gt.amax(2).or.xs1.gt.amax(3)) then
+      write(*,*) 'unreasonable initial guess for fl1'
+c      pause
+      else
+      endif
+
+c keep variables in the reasonable range
+      cnst=1.0d0/pi
+      xbr(1)=dtan(pi*(xa1-amin(1))/(amax(1)-amin(1))-pi/2.0d0)
+      xbr(2)=dtan(pi*(xr1-amin(2))/(amax(2)-amin(2))-pi/2.0d0)
+      xbr(3)=dtan(pi*(xs1-amin(3))/(amax(3)-amin(3))-pi/2.0d0)
+
+c solve non-linear equations
+      call broydn(xbr,nbr,check)
+c      call newt(xbr,nbr,check)
+      if (check) then
+      write(*,*) 'Convergence problems.'
+      endif
+      call funcv(nbr,xbr,fvec)
+
+c output results
+      xa1=(amax(1)-amin(1))*(cnst*datan(xbr(1))+0.5d0)+amin(1)
+      xr1=(amax(2)-amin(2))*(cnst*datan(xbr(2))+0.5d0)+amin(2)
+      xs1=(amax(3)-amin(3))*(cnst*datan(xbr(3))+0.5d0)+amin(3)
+      xa2=xa0-xa1
+      xr2=xr0-xr1
+      xs2=xs0-xs1
+
+      xt1=xa1+xr1+xs1
+      xt2=xa2+xr2+xs2
+
+c mole fraction in the phase liquid-I
+      fl1=xt1
+
+c convert to mole fraction
+      xar1(1)=xa1/xt1
+      xar2(1)=xa2/xt2
+      xar1(2)=xr1/xt1
+      xar2(2)=xr2/xt2
+      xar1(3)=xs1/xt1
+      xar2(3)=xs2/xt2
+      vm0=xar0(1)*mw(1)/den(1)+xar0(2)*mw(2)/den(2)+xar0(3)*mw(3)/den(3)
+      vm1=xar1(1)*mw(1)/den(1)+xar1(2)*mw(2)/den(2)+xar1(3)*mw(3)/den(3)
+      vm2=xar2(1)*mw(1)/den(1)+xar2(2)*mw(2)/den(2)+xar2(3)*mw(3)/den(3)
+c mole fraction of asphaltene in the heavy phase
+      if(xar1(1).gt.xar2(1)) then
+      ppa=xar1(1)*xt1/xa0
+      ppr=xar1(2)*xt1/xr0
+      vpp=(xar1(1)*mw(1)/den(1)+xar1(2)*mw(2)/den(2))*xt1
+      else
+      ppa=xar2(1)*xt2/xa0
+      ppr=xar2(2)*xt2/xr0
+      vpp=(xar2(1)*mw(1)/den(1)+xar2(2)*mw(2)/den(2))*xt2
+      endif
+
+      write(*,100) (fvec(i),i=1,nbr)
+100   FORMAT(2X,3(E12.6,2X))
+      end
+
+      SUBROUTINE FCN(NSA,XSA,FSA)
+      IMPLICIT INTEGER (I-N)
+      IMPLICIT REAL*8 (A-H,O-Z)
+      DOUBLE PRECISION XSA(NSA)
+      dimension eta(2),CP(2),CPA(2),cp0(2),
+     &          rho(2),sig(2),x(2)
+      dimension Hm(3),Aeps(3),vol(3),sn(2),y(2)
+      common /PARA/ Hm,Aeps,r12,cl,sigrs,aras,akapa,y
+      common /feed/ vol,Posm0,Posm,cp0,CP,Z,GA
+      pi=3.141592653589793d0
+c segment number of asphaltene and resin
+      sn(1)=1.0d0
+      sn(2)=cl
+
+c  diameters in nm
+      sig(2)=sigrs*0.1d0
+      sig(1)=r12*sig(2)
+
+c mole fractions, asphaltene, resin and medium
+      xa=XSA(1)
+      xr=XSA(2)
+      xs=1.0d0-xa-xr
+
+c molecular voulme, nm^3/molecule
+      volm=xa*vol(1)+xr*vol(2)+xs*vol(3)
+
+c number density rho,#/nm^3
+      rho(1)=xa/volm
+      rho(2)=xr/volm
+
+c packing frctions, asphaltene and resin
+      eta(1)=pi/6.d0*rho(1)*sn(1)*sig(1)**3
+      eta(2)=pi/6.d0*rho(2)*sn(2)*sig(2)**3
+
+c total number density, and mole fractions in the McMillan-Mayer Model
+      rhot=rho(1)+rho(2)
+      x(1)=rho(1)/rhot
+      x(2)=rho(2)/rhot
+
+c total packing fraction
+      etat=eta(1)+eta(2)
+c set up-limit for total packing fraction,it is 0.494 at the liquid-solid
+c phase transition for a hard-sphere fluid
+      if(etat.gt.0.5d0) then
+      FSA=1.0d8
+      do i=1,2
+      cp(i)=1.0
+      enddo
+      posm=1.0
+      goto 1000
+      else
+      endif
+
+c delta for numerical differiations
+      delta=1.d-6
+      call HELMHOL(eta,HELM)
+
+c chemical potential/kT
+      do i=1,2
+      del=delta*sn(i)
+      if(eta(i).lt.del) del=eta(i)/10.d0
+      eta(i)=eta(i)-del
+      etat1=eta(1)/sn(1)*(sig(i)/sig(1))**3
+     &     +eta(2)/sn(2)*(sig(i)/sig(2))**3
+      call HELMHOL(eta,HELM1)
+      eta(i)=eta(i)+2.0d0*del
+      etat2=eta(1)/sn(1)*(sig(i)/sig(1))**3
+     &     +eta(2)/sn(2)*(sig(i)/sig(2))**3
+      call HELMHOL(eta,HELM2)
+      CPA(i)=(HELM2*etat2-HELM1*etat1)/(2.0d0*del/sn(i))
+      eta(i)=eta(i)-del
+      enddo
+
+c     compressibility factor
+      siga3=x(1)*sig(1)**3*sn(1)+x(2)*sig(2)**3*sn(2)
+      del=delta
+      if(etat.lt.del) del=etat/10.0d0
+      etat1=etat-del
+      eta(1)=etat1*x(1)*sn(1)*sig(1)**3/siga3
+      eta(2)=etat1*x(2)*sn(2)*sig(2)**3/siga3
+      call HELMHOL(eta,HELMz1)
+      etat2=etat+del
+      eta(1)=etat2*x(1)*sn(1)*sig(1)**3/siga3
+      eta(2)=etat2*x(2)*sn(2)*sig(2)**3/siga3
+      call HELMHOL(eta,HELMz2)
+      Zahs=etat*(HELMz2-HELMz1)/(2.0d0*del)
+      Z=Zahs+1.d0
+c Posm/kT
+      Posm=Z*rhot
+c
+      if(eta(1).le.1.d-30) then
+      CP(1)=0.d0
+      else
+      CP(1)=CPA(1)+dlog(rho(1))
+      endif
+      if(eta(2).le.1.d-30) then
+      CP(2)=0.d0
+      else
+      CP(2)=CPA(2)+dlog(rho(2))
+      endif
+      GA=xa*CP(1)+xr*CP(2)-Posm*volm
+      GA0=xa*CP0(1)+xr*CP0(2)-Posm0*volm
+      FSA=GA-GA0
+1000  continue
+      END
+
+      subroutine funcv(nbr,xbr,fvec)
+      implicit integer (i-n)
+      implicit real*8 (a-h,o-z)
+      dimension xbr(nbr),fvec(nbr),amax(3),amin(3)
+      dimension XSA(2),CP1(2),CP2(2),vol(3),cp0(2),cp(2)
+
+      common /solver/ xa0,xr0,amin,amax
+      common /feed/ vol,Posm0,Posm,cp0,CP,Z,G
+      external FCN
+c
+      pi=3.141592653589793d0
+      cnst=1.0d0/pi
+      xs0=1.0d0-xa0-xr0
+      xa1=(amax(1)-amin(1))*(cnst*datan(xbr(1))+0.5d0)+amin(1)
+      xr1=(amax(2)-amin(2))*(cnst*datan(xbr(2))+0.5d0)+amin(2)
+      xs1=(amax(3)-amin(3))*(cnst*datan(xbr(3))+0.5d0)+amin(3)
+      xa2=xa0-xa1
+      xr2=xr0-xr1
+      xs2=xs0-xs1
+
+      NSA=2
+      XSA(1)=xa1/(xa1+xr1+xs1)
+      XSA(2)=xr1/(xa1+xr1+xs1)
+      call FCN(NSA,XSA,FSA)
+      do i=1,2
+      cp1(i)=cp(i)
+      enddo
+      P1=Posm
+
+      XSA(1)=xa2/(xa2+xr2+xs2)
+      XSA(2)=xr2/(xa2+xr2+xs2)
+      call FCN(NSA,XSA,FSA)
+      do i=1,2
+      cp2(i)=cp(i)
+      enddo
+      P2=Posm
+
+      fvec(1)=CP1(1)/CP2(1)-1.
+      fvec(2)=CP1(2)/CP2(2)-1.
+      fvec(3)=P1/P2-1.
+      return
+      end
+
+      subroutine HELMHOL(eta,HELM)
+      implicit real*8 (a-h,o-z)
+      dimension eta(2)
+      call vdw(eta,Fvdw)
+      call saft(eta,Fahs)
+C   write(*,*) 'Fvdw,Fahs',Fvdw,Fahs
+C HELM IS F/NkT,DIMENSIONLESS
+C F: HELMHOLTZ ENERGY,
+C N: TOTAL NUMBER OF MOLECULES(CHAINS)
+C T: ABSOLUTE TEMPERATURE, k: BOLTZMANN CONSTANT
+      HELM=Fahs+Fvdw
+      end
+
+      subroutine  vdw(eta,Fvdw)
+c Hm is Hamaker's constant/kT
+      implicit real*8 (a-h,o-z)
+      dimension y(2),sig(2),eta(2),rho(2)
+      dimension Hm(3),Aeps(3)
+      common /PARA/ Hm,Aeps,r12,cl,sigrs,aras,akapa,y
+      PI=3.141592653589793d0
+      sig(1)=r12
+      sig(2)=1.d0
+      sig12=(sig(1)+sig(2))/2.0d0
+      H11=(dsqrt(Hm(1))-dsqrt(Hm(3)))**2
+      H22=(dsqrt(Hm(2))-dsqrt(Hm(3)))**2
+      H12=dsqrt(H11*H22)
+
+c total number density of molecules (chains) rhot
+      rho(1)=eta(1)/sig(1)**3*(6.d0/PI)
+      rho(2)=eta(2)*6.d0/(PI*cl)
+      rhot=rho(1)+rho(2)
+
+      AAA= (eta(1)/y(1))**2*H11/r12**3
+     &      +2.d0*eta(1)*eta(2)*H12/(y(1)*y(2)*sig12**3)
+     &      +(eta(2)/y(2))**2*H22
+      Fvdw=-2.d0*AAA/(3.d0*PI*rhot)
+      return
+      end
+
+
+      subroutine saft(eta,Fahs)
+      implicit real*8 (a-h,o-z)
+      dimension eta(2),sig(2),x(2),sx(2),rho(2)
+      dimension Hm(3),Aeps(3),y(2)
+      common /PARA/ Hm,Aeps,r12,cl,sigrs,aras,akapa,y
+      PI=3.141592653589793d0
+      one=1.0d0
+      three=3.0d0
+      third=one/three
+      sig(1)=r12
+      sig(2)=1.d0
+
+      xi=eta(1)+eta(2)
+      if(xi.le.1.d-30) then
+      Fahs=0.0d0
+      goto 2000
+      else
+      endif
+c number density rho and molecular fraction
+      rho(1)=eta(1)/sig(1)**3*(6.d0/PI)
+      rho(2)=eta(2)*6.d0/(PI*cl)
+      rhot=rho(1)+rho(2)
+      rhots=rho(1)+rho(2)*cl
+      x(1)=rho(1)/rhot
+      x(2)=rho(2)/rhot
+
+c segment fraction
+      sx(1)=eta(1)/(eta(1)+eta(2)*r12**3)
+      sx(2)=1.0d0-sx(1)
+      if(sx(1)*sx(2).lt.0.0d0) then
+      write(*,*) sx(1),sx(2)
+      write(*,*) 'segment fractions in saft negative!'
+c      pause
+      else
+      endif
+      asig=(sx(1)*sig(1)**3+sx(2)*sig(2)**3)**(1.d0/3.d0)
+
+      eps11=Aeps(1)
+      eps12=Aeps(2)
+      eps22=Aeps(3)
+      r1=asig/sig(1)
+      r2=asig/sig(2)
+      sig12=(sig(1)+sig(2))/2.d0
+      gs=sig(1)*sig(2)/(sig12*asig)
+      xi0=xi
+      xi1=eta(1)*r1**2+eta(2)*r2**2
+      xi2=eta(1)*r1+eta(2)*r2
+      xi3=xi
+
+      g11=1.d0/(1.d0-xi)+(1.5d0/r1)*xi2/(1.d0-xi)**2
+     +     +0.5d0*(xi2/r1)**2/(1.d0-xi)**3
+      g12=1.d0/(1.d0-xi)+1.5d0*gs*xi2/(1.d0-xi)**2
+     +     +0.5d0*(xi2*gs)**2/(1.d0-xi)**3
+      g22=1.d0/(1.d0-xi)+(1.5d0/r2)*xi2/(1.d0-xi)**2
+     +     +0.5d0*(xi2/r2)**2/(1.d0-xi)**3
+      if(g22.lt.1.d-16) g22=1.d-16
+
+c Chain contribution for the Helmoholtz energy
+      Fchain=x(2)*(1.0d0-cl)*dlog(g22)
+
+      if (eps11.gt.100.) eps11=100.d0
+      if (eps12.gt.100.) eps12=100.d0
+
+      delAA=g11*(dexp(eps11)-1.d0)*akapa
+      delAB=g12*(dexp(eps12)-1.d0)*akapa
+      delBB=g22*(dexp(eps22)-1.d0)*akapa
+
+      rras=3.
+      w1=aras*(6.d0*eta(1)/pi)*delAA
+      w2=rras*(6.d0/pi)*(eta(2)/cl)*(sig12/sig(2))**3*delAB
+      w3=aras*(6.d0/pi)*eta(1)*(sig12/sig(1))**3*delAB
+      w4=rras*(6.d0/pi)*(eta(2)/cl)*delBB
+
+      N=1
+      XA1=0.5d0
+      XA2=0.5d0
+10    f1=XA1*(1.d0+w1*XA1+w2*XA2)-1.d0
+      f2=XA2*(1.d0+w3*XA1+w4*XA2)-1.d0
+      df11=(1.d0+w1*XA1+w2*XA2)+XA1*w1
+      df12=w2*XA1
+      df21=w3*XA2
+      df22=(1.d0+w3*XA1+w4*XA2)+XA2*w4
+      det=df11*df22-df12*df21
+      delta1=-(f1*df22-f2*df12)/det
+      delta2=-(f2*df11-f1*df21)/det
+      epsiron=dmax1(dabs(delta1),dabs(delta2))
+      if (N.gt.1e6) then
+      write(*,*) "Iteration diverges in saft!"
+      goto 2000
+      else
+      endif
+      if (epsiron.gt.1.d-10) then
+      XA1=XA1+delta1
+      XA2=XA2+delta2
+      N=N+1
+      goto 10
+      else
+      endif
+
+      if (XA1.lt.1.d-20) XA1=1.d-20
+      if (XA2.lt.1.d-20) XA2=1.d-20
+
+      Fassoc=x(1)*(aras*(dlog(XA1)-XA1/2.d0)+aras/2.d0)+
+     +       x(2)*(dlog(XA2)-XA2/2.d0+0.5d0)
+
+      if(xi3.gt.1.d0) xi3=0.99
+      Fhss=(xi2**3/(xi0*xi3**2)-1.d0)*dlog(1.d0-xi3)
+     +   +3.d0*xi1*xi2/(xi0*(1.d0-xi3))+xi2**3/(xi3*xi0*(1.d0-xi3)**2)
+
+      Fhs=Fhss*rhots/rhot
+      Fahs=Fhs+Fassoc+Fchain
+2000  end
+
+
+C       SUBROUTINE BUDEP IS FOR SATURATED (BUBBLE OR DEW) POINT
+C       PRESSURE CALCULATION
+C        NTYPE=1    BUBBLE CALCULATION
+C        NTYPE=2    DEW CALCULATION
+C=======================================================================
+
+      SUBROUTINE BUDEP(NTYPE,T,P,N,TB,TC,PC,AC,KIJ,X,Y,VL,VV)
+      IMPLICIT INTEGER (I-N)
+      IMPLICIT REAL*8 (A-H,O-Z)
+      REAL*8 KIJ
+      DIMENSION TB(50),TC(50),PC(50),AC(50),KIJ(50,50)
+      DIMENSION X(50),Y(50),FL(50),FV(50)
+      DIMENSION XK(50),PSI(50),PI(50)
+      DATA EPS/0.00001D0/,ITMAX/1000/
+
+
+      DO I=1,N
+      AAA=TB(I)
+      PSI(I)=PC(I)*DEXP(5.373D0*(1.0D0+AC(I))*(1.0D0-TC(I)/T))
+      IF(T.LT.TC(I)) THEN
+          PI(I)=PSI(I)
+          ELSE
+          PI(I)=DSQRT(PSI(I)*PC(I))
+          ENDIF
+      ENDDO
+
+      IF(NTYPE.EQ.1) THEN
+C INITIALIZE BUBBLE-POINT PRESSURE AND VAPOR COMPOSITION
+          P=0.0D0
+          DO I=1,N
+          P=P+X(I)*PI(I)
+          ENDDO
+
+          DO I=1,N
+          XK(I)=PSI(I)/P
+          ENDDO
+
+          SUMXK=0.0D0
+          DO I=1,N
+          SUMXK=SUMXK+X(I)*XK(I)
+          ENDDO
+
+          DO I=1,N
+          Y(I)=X(I)*XK(I)/SUMXK
+          ENDDO
+
+C     INITIAL DEW-POINT PRESSURE AND LIQUID COMPOSITION ESTIMATION
+      ELSE
+          P1=1.0D0
+          P2=0.0D0
+          DO I=1,N
+          P1=P1*PI(I)**Y(I)
+          P2=P2+Y(I)/PI(I)
+          ENDDO
+          P=DSQRT(P1/P2)
+
+          DO I=1,N
+          XK(I)=PSI(I)/P
+          ENDDO
+
+          SUMYK=0.0D0
+          DO I=1,N
+          SUMYK=SUMYK+Y(I)/XK(I)
+          ENDDO
+
+          DO I=1,N
+          X(I)=Y(I)/XK(I)/SUMYK
+          ENDDO
+      ENDIF
+C SUCCESSIVE SUBSTITUTION CALCULATION
+      ITER=0
+10    ITER=ITER+1
+      IF(ITER.GT.ITMAX) RETURN
+C      WRITE(*,*) NTYPE,P,SUMXYK,(XK(I),X(I),I=1,N)
+      CALL prfuga(1,T,P,N,TC,PC,AC,X,KIJ,VL,FL)
+      CALL prfuga(0,T,P,N,TC,PC,AC,Y,KIJ,VV,FV)
+      DO 20 I=1,N
+      IF(X(I).GT.1.D-10) THEN
+      XK(I)=(Y(I)/X(I))*FL(I)/FV(I)
+      ELSE
+      XK(I)=1.0D0
+      ENDIF
+20    CONTINUE
+      IF(NTYPE.EQ.1) THEN
+          SUMXYK=0.0D0
+          DO I=1,N
+          SUMXYK=SUMXYK+X(I)*XK(I)
+          ENDDO
+          P=P*(2.0D0-1.0D0/SUMXYK)
+          DO I=1,N
+          Y(I)=X(I)*XK(I)/SUMXYK
+          ENDDO
+      ELSE
+          SUMXYK=0.0D0
+          DO I=1,N
+          SUMXYK=SUMXYK+Y(I)/XK(I)
+          ENDDO
+          P=P/SUMXYK
+C RETRO-GRADE DEW-POINT
+C          P=P/(2.0D0-1.0D0/SUMYK)
+          DO I=1,N
+          X(I)=Y(I)/XK(I)/SUMXYK
+          ENDDO
+      ENDIF
+      IF(DABS(SUMXYK-1.D0).GT.EPS) GO TO 10
+      WRITE(*,*) 'NUMBER OF ITERATION',ITER
+      END
+
+C=======================================================================
+C
+C     SUBROUTINE BUDET
+C
+C     THIS SUBROUTINE PERFORMS EITHER BUBBLE OR DEW-TEMPERATURE
+C     CALCULATION USING NEWTON RAPHSON ITERATION FOR T.
+C
+C     MEANING OF W AND Z DEPENDS ON CHOICE OF CALCULATION
+C        NTYPE=1    BUBBLE CALCULATION
+C                   Z:  LIQUID PHASE
+C                   W:  VAPOR PHASE
+C        NTYPE=2    DEW CALCULATION
+C                   Z:  VAPOR PHASE
+C                   W:  LIQUID PHASE
+C
+C=======================================================================
+      SUBROUTINE BUDET(NTYPE,T,P,N,TB,TC,PC,AC,KIJ,Z,W,VL,VV)
+      IMPLICIT INTEGER (I-N)
+      IMPLICIT REAL*8 (A-H,O-Z)
+      REAL*8 KIJ
+      DIMENSION TB(50),TC(50),PC(50),AC(50),KIJ(50,50)
+      DIMENSION W(50),Z(50),FL(50),FV(50)
+      DIMENSION XK(50)
+      DATA EPS/1.D-8/,ITMAX/1000/
+      IF(T.LT.0.0D0) THEN
+C     ESTIMATION OF INITIAL DEW-POINT/BUBLE-POINT TEMPERATURE
+      TBG=0.0D0
+      TCG=0.0D0
+      DO 20  I=1,N
+      TBG=TBG+Z(I)*TB(I)
+      TCG=TCG+Z(I)*TC(I)
+20    CONTINUE
+      T=.5D0*(TBG+TCG)
+      ELSE
+      ENDIF
+C      WRITE(*,*) T,P
+C     ESTIMATION OF INITIAL LIQUID/VAPOR COMPOSITION
+      SUMX=0.0D0
+      DO 30  I=1,N
+      DT1=1.D0/T-1.D0/TB(I)
+      DT2=1.D0/TC(I)-1.D0/TB(I)
+      DLNP=DLOG(PC(I))
+      PSI=DEXP(DLNP*DT1/DT2)
+      XK(I)=PSI/P
+      IF(NTYPE.EQ.1)  W(I)=Z(I)*XK(I)
+      IF(NTYPE.EQ.2)  W(I)=Z(I)/XK(I)
+      SUMX=SUMX+W(I)
+30    CONTINUE
+      DO 40 I=1,N
+      W(I)=W(I)/SUMX
+40    CONTINUE
+
+C SUCCESSIVE SUBSTITUTION CALCULATION
+      ITER=0
+50    ITER=ITER+1
+      IF(ITER.GT.ITMAX) RETURN
+C      WRITE(*,*) NTYPE,T,SUMXYK,(XK(I),W(I),I=1,N)
+      IF(NTYPE.EQ.1)  THEN
+      CALL prfuga(1,T,P,N,TC,PC,AC,Z,KIJ,VL,FL)
+      CALL prfuga(0,T,P,N,TC,PC,AC,W,KIJ,VV,FV)
+      ELSE
+      CALL prfuga(1,T,P,N,TC,PC,AC,W,KIJ,VL,FL)
+      CALL prfuga(0,T,P,N,TC,PC,AC,Z,KIJ,VV,FV)
+      ENDIF
+
+      DO 60 I=1,N
+      IF (Z(I).GT.1.0D-10) THEN
+      IF(NTYPE.EQ.1)  XK(I)=(W(I)/Z(I))*FL(I)/FV(I)
+      IF(NTYPE.EQ.2)  XK(I)=(Z(I)/W(I))*FL(I)/FV(I)
+      ELSE
+      XK(I)=1.0D0
+      ENDIF
+60    CONTINUE
+
+      IF(NTYPE.EQ.1) THEN
+          SUMXYK=0.0D0
+          DO I=1,N
+          SUMXYK=SUMXYK+Z(I)*XK(I)
+          ENDDO
+          S=0.0D0
+          DO I=1,N
+          S=S+(1.0D0+AC(I))*TC(I)*Z(I)*XK(I)
+          ENDDO
+          EB=T/(5.373D0*S)
+          T=T*(1.0D0-EB*(SUMXYK-1.0D0))
+          DO I=1,N
+          W(I)=Z(I)*XK(I)/SUMXYK
+          ENDDO
+      ELSE
+          SUMXYK=0.0D0
+          DO I=1,N
+          SUMXYK=SUMXYK+Z(I)/XK(I)
+          ENDDO
+          S=0.0D0
+          DO I=1,N
+          S=S+(1.0D0+AC(I))*TC(I)*Z(I)/XK(I)
+          ENDDO
+          ED=T/(5.373D0*S)
+          T=T*(1.0D0-ED*(1.0D0-SUMXYK))
+          DO I=1,N
+          W(I)=Z(I)/XK(I)/SUMXYK
+          ENDDO
+      ENDIF
+      IF(DABS(SUMXYK-1.D0).GT.EPS) GO TO 50
+      WRITE(*,*) 'NUMBER OF ITERATION',ITER
+      END
+
+c IFHASE=0(VAPOR),1(LIQUID); T,TC, K; P,PC,BAR;V: CM^3/MOL
+      subroutine prfuga(IFASE,T,P,NC,TC,PC,AC,ZX,KIJ,V,F)
+      IMPLICIT INTEGER (I-N)
+      IMPLICIT REAL*8 (A-H,O-Z)
+      REAL*8 KIJ
+      INTEGER NC
+      PARAMETER (PI=3.1415926541D0,RG=8.31434D-5,
+     &   ZERO=0.0D0,ONE=1.0D0,TWO=2.0D0,THREE=3.0D0,FOUR=4.0D0)
+      DIMENSION TC(50),PC(50),AC(50),KIJ(50,50),F(50),ZX(50)
+      DIMENSION A(50),B(50),SA(50)
+
+      DO 10 I=1,NC
+      TR=T/TC(I)
+      BETA=.37464D0+1.54226D0*AC(I)-.26992D0*AC(I)**2
+      ALPHA=(ONE+BETA*(ONE-DSQRT(TR)))**2
+      A(I)=.457235529D0*((RG*TC(I))**2)/PC(I)*ALPHA
+      B(I)=7.7796074D-02*RG*TC(I)/PC(I)
+10    CONTINUE
+C       MIXING RULE
+      AA=0.0D0
+      DO 20 I=1,NC
+      SA(I)=0.0D0
+      DO 20 J=1,NC
+      AIJ=(ONE-KIJ(I, J))*DSQRT(A(I)*A(J))
+      AA=AA+ZX(I)*ZX(J)*AIJ
+      SA(I)=SA(I)+ZX(J)*AIJ
+20    CONTINUE
+      BB=0.0D0
+      DO 30 I=1,NC
+      BB=BB+ZX(I)*B(I)
+30    CONTINUE
+C      SOLVING FOR COMPRESSIBILITY FACTOR Z
+      CA=AA*P/((RG*T)**2)
+      CB=BB*P/(RG*T)
+      C1=CB-ONE
+      C2=CA-CB*(THREE*CB+TWO)
+      C3=CB*(CB*CB+CB-CA)
+      ZP=(THREE*C2-C1*C1)/THREE
+      ZQ=(TWO*C1**3-9.D0*C1*C2+27.D0*C3)/27.D0
+      ZR=(ZP/THREE)**3+(ZQ/TWO)**2
+      IF (ZR.GE.ZERO) THEN
+      ZA1=DSQRT(ZR)-ZQ/TWO
+      ZA=(ZA1/DABS(ZA1))*DABS(ZA1)**(ONE/THREE)
+      ZB=-ZP/(THREE*ZA)
+      Y1=ZA+ZB
+      Y2=Y1
+      Y3=Y1
+      ELSE
+      CS3U=-ZQ/TWO*(-ZP/THREE)**(-THREE/TWO)
+      U=DACOS(CS3U)/THREE
+      ZN=DSQRT(-FOUR*ZP/THREE)
+      Y1=ZN*DCOS(U)
+      Y2=ZN*DCOS(U+TWO*PI/THREE)
+      Y3=ZN*DCOS(U+FOUR*PI/THREE)
+      ENDIF
+      Z1=Y1-C1/THREE
+      Z2=Y2-C1/THREE
+      Z3=Y3-C1/THREE
+      ZV=DMAX1(Z1,Z2,Z3)
+      ZL=DMIN1(Z1,Z2,Z3)
+      VL=ZL*RG*T/P
+      VV=ZV*RG*T/P
+      IF (VL.LT.BB) ZL=ZV
+      IF (IFASE.EQ.0) THEN
+      Z=ZV
+      ELSE
+      Z=ZL
+      ENDIF
+      V=Z*RG*T*1.0D6/P
+      AF1=(Z+(ONE+DSQRT(TWO))*CB)/(Z+(ONE-DSQRT(TWO))*CB)
+      AF1=DLOG(AF1)
+      AF2=CA/(TWO*DSQRT(TWO)*CB)
+      DO 40 I=1,NC
+      AF3=TWO*SA(I)/AA-B(I)/BB
+      PHI=DEXP(B(I)*(Z-ONE)/BB-DLOG(Z-CB)-AF2*AF3*AF1)
+      F(I)=ZX(I)*P*PHI
+40    CONTINUE
+      RETURN
+      END
+
+
+c IFHASE=0(VAPOR),1(LIQUID); T,TC, K; P,PC,BAR;V: CM^3/MOL
+      subroutine prfuga1(IFASE,T,P,TC,PC,AC,V,F)
+      IMPLICIT INTEGER (I-N)
+      IMPLICIT REAL*8 (A-H,O-Z)
+      PARAMETER (PI=3.1415926541D0,RG=8.31434D-5,
+     &   ZERO=0.0D0,ONE=1.0D0,TWO=2.0D0,THREE=3.0D0,FOUR=4.0D0)
+
+      TR=T/TC
+      BETA=.37464D0+1.54226D0*AC-.26992D0*AC**2
+      ALPHA=(ONE+BETA*(ONE-DSQRT(TR)))**2
+      A=.457235529D0*((RG*TC)**2)/PC*ALPHA
+      B=7.7796074D-02*RG*TC/PC
+
+C      SOLVING FOR COMPRESSIBILITY FACTOR Z
+      CA=A*P/((RG*T)**2)
+      CB=B*P/(RG*T)
+      C1=CB-ONE
+      C2=CA-CB*(THREE*CB+TWO)
+      C3=CB*(CB*CB+CB-CA)
+      ZP=(THREE*C2-C1*C1)/THREE
+      ZQ=(TWO*C1**3-9.D0*C1*C2+27.D0*C3)/27.D0
+      ZR=(ZP/THREE)**3+(ZQ/TWO)**2
+      IF (ZR.GE.ZERO) THEN
+      ZA1=DSQRT(ZR)-ZQ/TWO
+      ZA=(ZA1/DABS(ZA1))*DABS(ZA1)**(ONE/THREE)
+      ZB=-ZP/(THREE*ZA)
+      Y1=ZA+ZB
+      Y2=Y1
+      Y3=Y1
+      ELSE
+      CS3U=-ZQ/TWO*(-ZP/THREE)**(-THREE/TWO)
+      U=DACOS(CS3U)/THREE
+      ZN=DSQRT(-FOUR*ZP/THREE)
+      Y1=ZN*DCOS(U)
+      Y2=ZN*DCOS(U+TWO*PI/THREE)
+      Y3=ZN*DCOS(U+FOUR*PI/THREE)
+      ENDIF
+      Z1=Y1-C1/THREE
+      Z2=Y2-C1/THREE
+      Z3=Y3-C1/THREE
+      ZV=DMAX1(Z1,Z2,Z3)
+      ZL=DMIN1(Z1,Z2,Z3)
+      VL=ZL*RG*T/P
+      VV=ZV*RG*T/P
+      IF (VL.LT.B) ZL=ZV
+      IF (IFASE.EQ.0) THEN
+      Z=ZV
+      ELSE
+      Z=ZL
+      ENDIF
+      V=Z*RG*T*1.0D6/P
+
+      AF1=(Z+(ONE+DSQRT(TWO))*CB)/(Z+(ONE-DSQRT(TWO))*CB)
+      AF1=DLOG(AF1)
+      AF2=CA/(TWO*DSQRT(TWO)*CB)
+      AF3=1.0
+      PHI=DEXP((Z-ONE)-DLOG(Z-CB)-AF2*AF3*AF1)
+      F=P*PHI
+      RETURN
+      END
+
+
+C
+      SUBROUTINE FLASH(T,PB,NCOMP,TC,PCB,OMI,KIJ,ZFEED,X,Y,VL,VV,FV)
+      IMPLICIT REAL*8(A-H,O-Z)
+      real*8 KIJ
+      DIMENSION KIJ(50,50),TC(50),PC(50),OMI(50),PCB(50)
+      PARAMETER (MAXC=50)
+      DIMENSION ZFEED(50) , X(50) , Y(50)
+      LOGICAL DEBUG
+      P=PB/1.01325D0
+      DO I=1,NCOMP
+      PC(I)=PCB(I)/1.01325D0
+      ENDDO
+      DEBUG = .FALSE.
+      INIT=0
+c      WRITE(*,*)' Enter EOS, 0=SRK, 1=PR '
+c      READ(*,*)IEQ
+      IEQ=1
+      IF( IEQ.NE.0 )IEQ = 1
+      CALL INDAT(NCOMP,IEQ,TC,PC,OMI,KIJ)
+      IF( T.EQ.0. )STOP
+      CALL FLASH2(NCOMP,T,P,ZFEED,X,Y,FRAC,ZX,ZY,ISB,INIT,DEBUG)
+      FV=FRAC
+      RG=8.31434D-5
+      VL=ZX*RG*T*1.0D6/P
+      VV=ZY*RG*T*1.0D6/P
+      IF( ISB.EQ.0 )THEN
+      DO I=1,NCOMP
+      X(I)=ZFEED(I)
+      Y(I)=0.0D0
+      ENDDO
+      FV=0.0D0
+      WRITE(*,9010)
+      ELSE
+      ENDIF
+ 9010 FORMAT(/,'  NO VAPOR PHASE EXISTS ',/)
+      END
+
+      SUBROUTINE INDAT(NC,IEQ,TC,PC,OMI,KIJ)
+      IMPLICIT REAL*8(A-H,O-Z)
+      REAL*8 KIJ(50,50),TC(50),PC(50),OMI(50)
+      PARAMETER(MAXC=50,MC2=MAXC*MAXC)
+      COMMON /CUB   / C , C1 , C2
+      COMMON /CRIT  / TCR(MAXC) , PCR(MAXC) , OMG(MAXC)
+      COMMON /STYR  / NCOMP , NDER , NTEMP
+      COMMON /OVER  / AC(MAXC) , Q(MAXC) , TSQR(MAXC)
+      COMMON /PAR   / CK(MC2) , BC(MAXC) , AC0(MAXC) , AC1(MAXC) ,
+     &                AC2(MAXC)
+
+      C = dble(IEQ)
+      CALL CONST(C,C1,C2,CONA,CONB)
+      NCOMP = NC
+      DO 100 I = 1 , NCOMP
+         TCR(I) = TC(I)
+         TSQR(I) = 1./DSQRT(TCR(I))
+         PCR(I) = PC(I)
+         BC(I) = CONB*TCR(I)/PCR(I)
+         AC(I) = CONA*TCR(I)/DSQRT(PCR(I))
+         OM = OMI(I)
+         OMG(I) = OM
+C-----iceq=0: srk
+         Q(I) = .48 + OM*(1.574-.176*OM)
+C-----ieq=1: peng-robinson
+         IF( IEQ.EQ.1 )Q(I) = .37464 + OM*(1.54226-.26992*OM)
+ 100  CONTINUE
+      NAD = 0
+      DO 400 I = 1 , NCOMP
+         DO 300 J = I , NCOMP
+            NAD = NAD + 1
+            CK(NAD) = KIJ(I,J)
+ 300     CONTINUE
+ 400  CONTINUE
+      RETURN
+      END
+
+      SUBROUTINE CONST(C,C1,C2,AC,BC)
+      IMPLICIT REAL*8(A-H,O-Z)
+      U = 1. + C
+      W = -C
+      D = U*U - 4.*W
+      C2 = (U+DSQRT(D))/2.
+      C1 = W/C2
+      S1 = 1. + ((U+W)*(U+3.d0)-W)/2.
+      S2 = 1. + U + W
+      R = DSQRT(S1*S1-S2*S2*S2)
+      A = (S1+R)**(1.D0/3.0d0)
+      B = S2/A
+      X = A + B + 1.d0
+      BC = 1.d0/(3.d0*X+U-1)
+      AC = BC*DSQRT(X*(X*X-3.d0*W)-U*W)
+      RETURN
+      END
+
+      SUBROUTINE FLASH2(NCOMP,T,P,ZFEED,X,Y,FRAC,ZX,ZY,ISB,INIT,DEBUG)
+      IMPLICIT REAL*8(A-H,O-Z)
+C
+C     TWO-PHASE FLASH ROUTINE
+C
+C     NCOMP     (I):    NO. OF COMPONENTS
+C     T,P       (I):    FLASH TEMPERATURE AND PRESSURE
+C     ZFEED     (I):    MOLAR FEED
+C     X        (IO):    X-PHASE MOLE FRACTION
+C     Y        (IO):    Y-PHASE MOLE FRACTION
+C     FRAC      (O):    FRACTION OF FEED IN Y-PHASE
+C     ZX,ZY     (O):    COMPRESSIBILITY FACTORS FOR X- AND Y-PHASE
+C     ISB       (O):    STABILITY INDICATOR; ISB=0: ONLY ONE PHASE
+C     INIT      (I):    CONTROLS INITIAL ESTIMATE; INIT=0: NO ESTIMATE
+C                       INIT=1: START W. GIVEN X AND Y; INIT=2: DIRECTLY TO
+C                       SECOND ORDER METHOD
+C     DEBUG     (I):    CONTROLS TEST PRINTING; SET TO TRUE FOR OUTPUT
+C
+      PARAMETER(MAXC=50)
+      DIMENSION ZFEED(MAXC) , X(MAXC) , Y(MAXC)
+      DIMENSION Z(MAXC) , VECT(MAXC)
+      LOGICAL DEBUG
+C
+C     COPY FEED TO WORK WECTOR Z
+C
+      DO 100 I = 1 , NCOMP
+         Z(I) = ZFEED(I)
+ 100  CONTINUE
+C
+C     NORMALIZE FEED
+C
+      CALL SUM(NCOMP,Z,SZ,1)
+C
+C     STABILITY ANALYSIS AND FLASH CALCULATION
+C
+      CALL STABL(INIT,NCOMP,T,P,VECT,Z,X,Y,FRAC,ZX,ZY,ISB,DEBUG)
+      RETURN
+      END
+      SUBROUTINE SUM(N,Z,SZ,IC)
+C
+C     NORMALIZE Z; RETURN SUM IN SZ
+C
+      IMPLICIT REAL*8(A-H,O-Z)
+      DIMENSION Z(50)
+      SZ = 0.
+      DO 100 I = 1 , N
+         SZ = SZ + Z(I)
+ 100  CONTINUE
+      IF( IC.EQ.0 .OR. SZ.EQ.0. )RETURN
+      DO 200 I = 1 , N
+C     IF (Z(I).EQ.0.) Z(I)=SZ*1.D-15
+         Z(I) = Z(I)/SZ
+ 200  CONTINUE
+      RETURN
+      END
+
+      SUBROUTINE STABL(INIT,NCOMP,T,P,VECT,Z,X,Y,FRAC,ZX,ZY,ICB,DEBUG)
+      IMPLICIT REAL*8(A-H,O-Z)
+C
+C     STABL CONTROLS THE FLASH CALCULATION  AND CALLS THE MINIMIZER
+C
+C     INIT      (I):    CONTROLS INITIAL ESTIMATES (SEE FLASH2)
+C     NCOMP:    (I):    NO. OF COMPONENTS IN MIXTURE
+C     T,P       (I):    SPECIFIED TEMPERATURE AND PRESSURE
+C     VECT      (W):    WORKING AREA FOR LOG K-FACTORS
+C     Z         (I):    FEED MOLE FRACTION
+C     X,Y      (IO):    X- AND Y-PHASE MOLE FRACTIONS
+C     FRAC      (O):    FRACTION OF FEED IN Y-PHASE
+C     ZX,ZY     (O):    COMPRESSIBILITY FACTORS FOR X-AND Y-PHASE
+C     ICB       (O):    STABILITY INDICATOR; 0 FOR ONLY ONE PHASE
+C     DEBUG     (I):    CONTROLS PRINTING FROM ROUTINE
+C
+      PARAMETER(MAXC=50)
+      PARAMETER(CNTOL=1.D-7)
+      DIMENSION VECT(MAXC) , X(MAXC) , Y(MAXC) , Z(MAXC)
+      DIMENSION FUGZ(MAXC) , VNEW(MAXC) , ERR(MAXC) , VSAVE(MAXC)
+      COMMON /LPROP / FGX(MAXC) , FXT(MAXC) , FXP(MAXC) , DFX(MAXC,MAXC)
+     &                 , AUXX(MAXC)
+      COMMON /VPROP / FGY(MAXC) , FYT(MAXC) , FYP(MAXC) , DFY(MAXC,MAXC)
+     &                 , AUXY(MAXC)
+      COMMON /CRIT  / TC(MAXC) , PC(MAXC) , OMEGA(MAXC)
+      LOGICAL DEBUG , LIQT
+      ICB = 0
+C
+C     OBFL AND OBFV ARE TANGENT PLANE DISTANCES FOR HEAVY AND LIGHT TRIAL PHASE
+C
+      OBFL = 0
+      OBFV = 0
+C
+C     GET FEED PROPERTIES
+C
+      CALL TERMO(1,0,IC,T,P,ZZ,Z,FUGZ,FXT,FXP,DFX,AUXX)
+C
+C     TRY DIRECT SUBSTITUTION 3 TIMES; INVESTIGATE PHASE SPLIT
+C     AND TANGENT PLANE DISTANCE
+C
+      OBAS = 0.D0
+C
+C     PROPERTIES OF FEED EVALUATED
+C
+      DO 100 I = 1 , NCOMP
+         ZI = Z(I)
+         ZZ = -30.
+         IF( ZI.NE.0. )ZZ = DLOG(ZI)
+         FUGZ(I) = FUGZ(I) + ZZ
+         OBAS = OBAS + ZI*FUGZ(I)
+         V = DLOG(PC(I)/P) + (5.37*(1+OMEGA(I))*(1.-TC(I)/T))
+C----- RAOULTS LAW INITIAL ESTIMATE FOR K-FACTORS
+         VSAVE(I) = V
+         VECT(I) = V
+ 100  CONTINUE
+      FRAC = 0.5
+C
+C     INIT=0 FOR NO INITIAL ESTIMATE
+C     INIT=1 TO UTILIZE INITIAL ESTIMATE FROM PREVIOUS CALCULATION
+C
+      IF( INIT.GT.0 )THEN
+         CALL TERMO(1,0,IC,T,P,ZX,X,FGX,FXT,FXP,DFX,AUXX)
+         CALL TERMO(1,0,IC,T,P,ZY,Y,FGY,FYT,FYP,DFY,AUXY)
+         DO 150 I = 1 , NCOMP
+            VECT(I) = FGX(I) - FGY(I)
+ 150     CONTINUE
+      ENDIF
+      CALL DIRSUB(NCOMP,T,P,X,Y,Z,VECT,VNEW,FRAC,ERR,ESQ,GMAX,FUGZ,TPDX,
+     &            TPDY,OBFUN,ZX,ZY)
+      CALL VCOPY(NCOMP,VNEW,VECT)
+C
+C     INIT>1: DIRECTLY TO SECOND ORDER METHOD, IF UNSTABLE
+C
+      IF( INIT.GT.1 .AND. OBFUN.LT.-CNTOL )GOTO 1100
+C
+C     CONTINUE IF PHASES SPLIT
+C
+      IF( FRAC.GT.0.D0 .AND. FRAC.LT.1.D0 )THEN
+         DO 200 KRUN = 1 , 3
+            CALL DIRSUB(NCOMP,T,P,X,Y,Z,VECT,VNEW,FRAC,ERR,ESQ,GMAX,
+     &                  FUGZ,TPDX,TPDY,DELGBS,ZX,ZY)
+            CALL VCOPY(NCOMP,VNEW,VECT)
+C-----FIRST CHECK GIBBS ENERGY
+            IF( DELGBS.LT.-.1*CNTOL )GOTO 800
+C
+C     NEGATIVE G: SPLIT CONFIRMED
+C
+C-----NEXT TANGENT PLANE DISTANCES
+            IF( TPDX.LT.-.1*CNTOL .OR. TPDY.LT.-.1*CNTOL )THEN
+               OBFL = TPDX
+               OBFV = TPDY
+               ICB = 1
+               GOTO 600
+C
+C     NEGATIVE TPD: SPLIT CONFIRMED, BUT CHANGE ESTIMATE
+C
+            ENDIF
+            CALL SOLRAC(NCOMP,X,Y,Z,VECT,FRAC)
+            IF( FRAC.LE.0.D0 .OR. FRAC.GE.1.D0 )GOTO 300
+ 200     CONTINUE
+      ENDIF
+C---EXIT
+ 300  INDEX = 1
+      IF( FRAC.GT..5D0 )INDEX = -1
+      ITYP = 0
+      DO 400 I = 1 , NCOMP
+         CFAC = DEXP(VSAVE(I))
+         X(I) = Z(I)/CFAC
+         Y(I) = Z(I)*CFAC
+ 400  CONTINUE
+      DO 500 KK = 1 , 2
+         IFAC = (3-2*KK)*INDEX
+         IF( IFAC.GT.0 )THEN
+            CALL HEBMIN(NCOMP,ITYP,ICODE,ISTAV,T,P,Y,Z,FUGZ,OBFV,DEBUG)
+            IF( ISTAV.NE.0 )ICB = 1
+         ELSE
+            CALL HEBMIN(NCOMP,ITYP,ICODE,ISTAL,T,P,X,Z,FUGZ,OBFL,DEBUG)
+            IF( ISTAL.NE.0 )ICB = 1
+         ENDIF
+         IF( ICB.EQ.1 )GOTO 600
+ 500  CONTINUE
+      RETURN
+C
+C     ---UNSTABLE; CALC. RESULT
+C
+ 600  FRAC = .5
+      LIQT = (OBFL.LT.OBFV)
+      DO 700 I = 1 , NCOMP
+         ZI = Z(I)
+         IF( ZI.EQ.0.D0 )THEN
+            VECT(I) = 0.D0
+         ELSEIF( LIQT )THEN
+            VECT(I) = DLOG(ZI/X(I))
+         ELSE
+            VECT(I) = DLOG(Y(I)/ZI)
+         ENDIF
+ 700  CONTINUE
+C
+C     TAKE A FEW STEPS OF DIRECT SUBSTITUTION
+C
+ 800  CALL DIRSUB(NCOMP,T,P,X,Y,Z,VECT,VNEW,FRAC,ERR,ESQ,GMAX,FUGZ,TPDX,
+     &            TPDY,OBFUN,ZX,ZY)
+      CALL VCOPY(NCOMP,VNEW,VECT)
+      DO 1000 LOOP = 1 , 3
+         DO 850 KK = 1 , 3
+            CALL DIRSUB(NCOMP,T,P,X,Y,Z,VECT,VNEW,FRAC,ERR,ESQ,GMAX,
+     &                  FUGZ,TPDX,TPDY,OBFUN,ZX,ZY)
+            CALL VCOPY(NCOMP,VNEW,VECT)
+C
+C     CHECK MAX. DEVIATION, EXIT IF CONVERGED
+C
+            IF( GMAX.LT.CNTOL )GOTO 1000
+            IF( KK.EQ.2 )FAC2 = ESQ
+            IF( KK.EQ.3 )FAC3 = ESQ
+ 850     CONTINUE
+C
+C     ATTEMPT EXTRAPOLATION
+C
+         RATIO = DSQRT(FAC3/FAC2)
+         IF( RATIO.GT..95D0 )RATIO = .95D0
+         FACTOR = RATIO/(1-RATIO)
+         OBOLD = OBFUN
+         DO 900 I = 1 , NCOMP
+            VSAVE(I) = VECT(I)
+            VECT(I) = VECT(I) + FACTOR*ERR(I)
+ 900     CONTINUE
+         CALL DIRSUB(NCOMP,T,P,X,Y,Z,VECT,VNEW,FRAC,ERR,ESQ,GMAX,FUGZ,
+     &               TPDX,TPDY,OBFUN,ZX,ZY)
+         IF( DEBUG )WRITE(*,9010)LOOP , RATIO , OBFUN
+         IF( OBFUN.LT.OBOLD+1.D-10 )THEN
+C----ACCEPT EXTRAPOLATE
+            CALL VCOPY(NCOMP,VNEW,VECT)
+         ELSE
+C----ABANDON DIRECT SUBSTITUTION
+            CALL VCOPY(NCOMP,VSAVE,VECT)
+            GOTO 1100
+         ENDIF
+ 1000 CONTINUE
+ 1100 ICB = 1
+      CALL SOLRAC(NCOMP,X,Y,Z,VECT,FRAC)
+      IF( GMAX.LT.CNTOL )RETURN
+      FLIQ = 1 - FRAC
+      DO 1200 I = 1 , NCOMP
+         X(I) = FLIQ*X(I)
+         Y(I) = FRAC*Y(I)
+ 1200 CONTINUE
+      CALL SOLMIN(NCOMP,ISTAT,T,P,X,Y,Z,ZX,ZY,OBAS,DEBUG)
+      SUMY = 0.D0
+      DO 1300 I = 1 , NCOMP
+         SUMY = SUMY + Y(I)
+ 1300 CONTINUE
+      FRAC = SUMY
+      SUMX = 1 - SUMY
+      DO 1400 I = 1 , NCOMP
+         X(I) = X(I)/SUMX
+         Y(I) = Y(I)/SUMY
+ 1400 CONTINUE
+      RETURN
+ 9010 FORMAT(' LOOP = ',I3,' EIG.VAL = ',F6.2,' OBFUN = ',D10.3)
+      END
+      SUBROUTINE DIACOR(NELEM,NDIM,HESS,HESC,GRAD,DIST,TOL,DIA,XVEC,XV1,
+     &                  XV2,SIZE)
+      IMPLICIT REAL*8(A-H,O-Z)
+C
+C     THE SUBROUTINE SOLVES THE EQN (HESS+DIA*I)*XVEC = GRAD FOR THE
+C     DIAGONAL CORRECTION DIA(>=0) SUCH THAT THE LENGTH OF THE SOLU-
+C     TION VECTOR XVEC EQUALS DIST, WITHIN RELATIVE TOLERANCE TOL
+C
+C     NELEM     (I)     SIZE OF SYSTEM
+C     NDIM      (I)     ROW DIMENSION OF HESS
+C     HESS      (I)     COEFFICIENT MATRIX
+C     HESC      (W)     WORK AREA FOR HESS+DIA*I
+C     GRAD      (I)     RHS-VECTOR
+C     DIST      (I)     LENGTH OF SOLUTION VECTOR
+C     TOL       (I)     TOLERANCE FOR SOLUTION
+C     DIA       (IO)    DIAGONAL CORRECTION (ON INPUT INITIAL EST.)
+C     XVEC      (O)     SOLUTION VECTOR
+C     XV1,XV2   (W)     WORK AREA FOR LOCAL VECTORS
+C     SIZE      (O)     LENGTH OF SOLUTION VECTOR
+C
+      PARAMETER(MAXC=50)
+      DIMENSION HESS(NDIM,MAXC) , HESC(NDIM,MAXC) , GRAD(MAXC)
+     &           , XVEC(MAXC) , XV1(MAXC), XV2(MAXC)
+      LOGICAL POSDEF , MAXLOC , MINLOC , BRAC
+      MINLOC = .FALSE.
+      MAXLOC = .FALSE.
+C----MAXLOC INDICATES THAT A DIA-VALUE WHICH IS TOO LARGE HAS BEEN FOUND
+      DIAMIN = 0.D0
+      DS2 = DIST*DIST
+      ITER = 0
+ 100  ITER = ITER + 1
+C
+C     COPY ORIGINAL HESSIAN AND GRADIENT, ADD DIAGONAL CORR.
+C
+      DO 200 I = 1 , NELEM
+         DO 150 J = 1 , NELEM
+            HESC(I,J) = HESS(I,J)
+ 150     CONTINUE
+         HESC(I,I) = HESC(I,I) + DIA
+         XV1(I) = GRAD(I)
+ 200  CONTINUE
+C
+C     FACTORIZE AND SOLVE FOR RHS
+C
+      CALL LDLDEC(NDIM,NELEM,HESC,XV1,1)
+      CALL LDLDEC(NDIM,NELEM,HESC,XV1,2)
+C
+C     GET DERIVATIVE (NEG.) WRT. DIA
+C
+      POSDEF = .TRUE.
+      DO 300 I = 1 , NELEM
+         IF( HESC(I,I).LE.0.D0 )POSDEF = .FALSE.
+         XVEC(I) = XV1(I)
+         XV2(I) = XV1(I)
+ 300  CONTINUE
+      CALL LDLDEC(NDIM,NELEM,HESC,XV2,2)
+C
+C     GET LENGTH AND EVALUATE CORRECTION
+C
+      PRD1 = 0.D0
+      PRD2 = 0.D0
+      DO 400 I = 1 , NELEM
+         PRD1 = PRD1 + XV1(I)*XV1(I)
+         PRD2 = PRD2 + XV1(I)*XV2(I)
+ 400  CONTINUE
+      SIZE = DSQRT(PRD1)
+C---TEST RANGE
+      IF( .NOT.(POSDEF) )THEN
+         DIAMIN = DIA
+         MINLOC = .TRUE.
+         IF( DIA.EQ.0. )THEN
+C------PRD1/PRD2 IS THE DOMINANT EIGENVALUE ESTIMATE
+            DIA = DABS(1.2*PRD1/PRD2)
+         ELSEIF( MAXLOC )THEN
+            DIA = (DIA+DIAMAX)/2
+         ELSE
+            DIA = 3*DIA
+         ENDIF
+         GOTO 100
+      ELSEIF( PRD1.LT.DS2 )THEN
+         DIAMAX = DIA
+         MAXLOC = .TRUE.
+      ELSE
+         DIAMIN = DIA
+         MINLOC = .TRUE.
+      ENDIF
+C
+C     CHECK IF DIA=0 YIELDS TOO SHORT VECTOR; EXIT IN CASE IT DOES
+C
+      IF( DIA.EQ.0. .AND. PRD1.LT.DS2 )RETURN
+      RATIO = PRD1/PRD2
+      EIVAL = RATIO - DIA
+      CNST = PRD1*RATIO**2
+      RAT1 = (PRD1/DS2-1)/2.D0
+C
+C     TEST CONVERGENCE AND CORRECT IF NEEDED
+C
+      IF( DABS(RAT1).GT.TOL )THEN
+         DN2 = CNST/DS2
+         CNEW = DSQRT(DN2)
+         DIA = CNEW - EIVAL
+         BRAC = (MINLOC .AND. MAXLOC)
+         IF( BRAC )THEN
+            IF( DIA.LT.DIAMIN .OR. DIA.GT.DIAMAX )DIA = (DIAMIN+DIAMAX)
+     &          /2
+         ENDIF
+         IF( DIA.LE.0.D0 )DIA = 0.D0
+         GOTO 100
+      ENDIF
+      RETURN
+      END
+      SUBROUTINE HEBMIN(NCOMP,ITYP,ICODE,ISTAB,T,P,Y,Z,FLZ,RES,DEBUG)
+      IMPLICIT REAL*8(A-H,O-Z)
+      PARAMETER(MAXC=50,ITMAX=20)
+      PARAMETER(CNTOL=1.D-7)
+C
+C     NCOMP     (I)     NO. OF COMPONENTS IN MIXTURE
+C     ITYP      (I)     TYPE OF CALC; ITYP=0: STOP IF UNSTABLE; =1: CONVERGE
+C     ICODE     (O)     CONVERGENCE INDICATOR; 0: NOT CONV. 1: UNST.; 2: CONV.
+C     ISTAB     (O)     STABILITY INDIC: 0=STABLE, 1=UNSTABLE
+C     T         (I)     TEMPERATURE
+C     P         (I)     PRESSURE
+C     Y         (IO)    INITIAL/FINAL COMPOSITION
+C     FLZ       (I)     LOG (FUGACITY COEFFICENT * MOLEFRAC) FOR FEED
+C     RES       (O)     VALUE OF OBJECTIVE FUNCTION AT TERMINATION
+c     DEBUG     (I)     CONTROLS PRINTING OF OUTPUT
+C
+C     LOCALS
+C
+      DIMENSION Y(MAXC) , FLZ(MAXC) , Z(MAXC)
+      DIMENSION YLOG(MAXC) , ERR(MAXC) , YLNEW(MAXC) , RAT(2)
+      DIMENSION ALFA(MAXC) , AOLD(MAXC) , GRAD(MAXC) , AH(MAXC) ,
+     &          SGD(MAXC) , XV1(MAXC) , XV2(MAXC) , DALFA(MAXC) ,
+     &          FDUP(MAXC,MAXC)
+      COMMON /VPROP / FGY(MAXC) , FYT(MAXC) , FYP(MAXC) , DFY(MAXC,MAXC)
+     &                 , AUXY(MAXC)
+      LOGICAL DEBUG
+C
+C     MINIMIZATION ROUTINE
+C
+C    DIRECT SUBSTITUTION TO INITIATE, SQUARE ROOTS USED AS VARIABLES
+C
+      ISTAB = 0
+      ICODE = 0
+      DO 100 I = 1 , NCOMP
+         IF( Z(I).NE.0.D0 )THEN
+            YLOG(I) = DLOG(Y(I))
+         ELSE
+            YLOG(I) = 0.D0
+         ENDIF
+ 100  CONTINUE
+      CALL STASUB(NCOMP,T,P,Z,YLOG,Y,YLNEW,ERR,FLZ,ESQ,GMAX,OBFUN)
+      CALL VCOPY(NCOMP,YLNEW,YLOG)
+      DO 300 LOOP = 1 , 4
+C
+C     LOOP FOR DIRECT SUBSTITUTION
+C
+         DO 150 KK = 1 , 2
+C
+C     DIRECT SUBSTITUTION
+C
+            CALL STASUB(NCOMP,T,P,Z,YLOG,Y,YLNEW,ERR,FLZ,ESQ,GMAX,OBFUN)
+            PRD = 0.D0
+            DIST = 0.D0
+            DO 120 I = 1 , NCOMP
+               ZYSQ = DSQRT(Y(I)*Z(I))
+               DIST = DIST + Y(I) + Z(I) - 2*ZYSQ
+               PRD = PRD - (Y(I)-ZYSQ)*ERR(I)
+ 120        CONTINUE
+C
+C     TEST OBJECTIVE FUNCTION
+C
+            IF( ITYP.EQ.0 .AND. OBFUN.LT.-CNTOL )THEN
+               RES = OBFUN
+               ISTAB = 1
+               ICODE = 1
+               RETURN
+            ENDIF
+            IF( GMAX.LT.CNTOL )THEN
+C----CONVERGED
+               RES = OBFUN
+               ICODE = 2
+               IF( OBFUN.LT.-CNTOL )THEN
+                  ISTAB = 1
+               ELSE
+                  ISTAB = 0
+               ENDIF
+               RETURN
+            ENDIF
+            RT2 = OBFUN/PRD
+            IF( DIST.LT.0. )DIST = -DIST
+            DIST = DSQRT(DIST)
+            IF( DEBUG )WRITE(*,9010)DIST , RT2 , OBFUN
+            IF( DIST.LT..1 .AND. RT2.GT..8 )THEN
+C---CONVERGENCE TO TRIVIAL LIKELY; ABANDON
+               ISTAB = 0
+               ICODE = 2
+               RES = OBFUN
+               RETURN
+            ENDIF
+            RAT(KK) = ESQ
+            CALL VCOPY(NCOMP,YLNEW,YLOG)
+ 150     CONTINUE
+C
+C     EXTRAPOLATE
+C
+         RATIO = DSQRT(RAT(2)/RAT(1))
+         IF( RATIO.LT.0. .OR. RATIO.GE.1.D0 )RATIO = .95D0
+         FACTOR = RATIO/(1.D0-RATIO)
+C
+C     FORM EXTRAPOLATE
+C
+         DO 200 I = 1 , NCOMP
+            YLNEW(I) = YLNEW(I) + FACTOR*ERR(I)
+ 200     CONTINUE
+         CALL STASUB(NCOMP,T,P,Z,YLNEW,Y,XV1,ERR,FLZ,ESQ,GMAX,OBTST)
+         IF( OBTST.GT.OBFUN+1.D-10 )GOTO 400
+C
+C     EXTRAPOLATION SUCCESFULL
+C
+         CALL VCOPY(NCOMP,XV1,YLOG)
+ 300  CONTINUE
+ 400  DO 500 I = 1 , NCOMP
+         IF( Z(I).GT.0.D0 )THEN
+            Y(I) = DEXP(YLOG(I))
+         ELSE
+            Y(I) = 0.D0
+         ENDIF
+ 500  CONTINUE
+C
+C     HEBDEN OPTIMIZATION; SET MAX. STEP AND START
+C
+      HVAL = .25
+      TOL = .1
+      ITER = 0
+      DO 600 I = 1 , NCOMP
+         ALFA(I) = 2*DSQRT(Y(I))
+ 600  CONTINUE
+ 700  ITER = ITER + 1
+      IF( ITER.GT.ITMAX )RETURN
+      CALL TERMO(3,0,IC,T,P,ZY,Y,FGY,FYT,FYP,DFY,AUXY)
+      OBFO = 1
+C
+C     CALCULATE GRADIENT AND OBJECTIVE FUNCTION
+C
+      GMAX = 0.D0
+      SUMY = 0.
+      DO 800 I = 1 , NCOMP
+         AH(I) = ALFA(I)*.5D0
+         AOLD(I) = ALFA(I)
+         IF( Z(I).GT.0.D0 )THEN
+            DLY = DLOG(Y(I))
+            SGD(I) = DLY + FGY(I) - FLZ(I)
+         ELSE
+            SGD(I) = 0.D0
+         ENDIF
+         GRAD(I) = -SGD(I)*AH(I)
+         IF( DABS(GRAD(I)).GT.GMAX )GMAX = DABS(GRAD(I))
+         OBFO = OBFO + Y(I)*(SGD(I)-1)
+         SUMY = SUMY + Y(I)
+ 800  CONTINUE
+      IF( GMAX.LT.CNTOL )THEN
+C----CONVERGED
+         RES = OBFO
+         ICODE = 2
+         IF( OBFO.LT.-CNTOL )THEN
+            ISTAB = 1
+         ELSE
+            ISTAB = 0
+         ENDIF
+         RETURN
+      ENDIF
+C
+C     CALCULATE HESSIAN MATRIX
+C
+      DO 900 I = 1 , NCOMP
+         AHI = AH(I)/SUMY
+         DO 850 J = 1 , I
+            TERM = AHI*AH(J)*DFY(I,J)
+            DFY(I,J) = TERM
+            DFY(J,I) = TERM
+ 850     CONTINUE
+         DFY(I,I) = DFY(I,I) + 1.D0 + .5D0*SGD(I)
+ 900  CONTINUE
+      DIA = 0.D0
+ 1000 CALL DIACOR(NCOMP,MAXC,DFY,FDUP,GRAD,HVAL,TOL,DIA,DALFA,XV1,XV2,
+     &            SIZE)
+      DO 1100 I = 1 , NCOMP
+         DD = DALFA(I)
+         IF( DD+AOLD(I).LE.0. )DD = -.9*AOLD(I)
+         DALFA(I) = DD
+         ALFA(I) = AOLD(I) + DD
+         Y(I) = (.5D0*ALFA(I))**2
+ 1100 CONTINUE
+      OBNEW = 1
+      CALL TERMO(1,0,IC,T,P,ZY,Y,FGY,FYT,FYP,DFY,AUXY)
+      DO 1200 I = 1 , NCOMP
+         IF( Y(I).GT.0.0 )OBNEW = OBNEW + Y(I)
+     &                            *(DLOG(Y(I))+FGY(I)-FLZ(I)-1)
+ 1200 CONTINUE
+      IF( ITYP.EQ.0. .AND. OBNEW.LT.-1.D-3 )THEN
+C-----TERMINATE
+         ISTAB = 1
+         ICODE = 1
+      ENDIF
+C
+C     TEST FOR IMPROVEMENT
+C
+      IF( OBNEW.GT.OBFO+1.D-12 )THEN
+C----FAILURE
+         HVAL = SIZE/3
+         GOTO 1000
+      ENDIF
+      CALC = OBNEW - OBFO
+      PRED = 0.D0
+      DO 1300 I = 1 , NCOMP
+         SUMP = 0.D0
+         DO 1250 J = 1 , NCOMP
+            SUMP = SUMP + DFY(I,J)*DALFA(J)
+ 1250    CONTINUE
+         PRED = PRED + DALFA(I)*(SUMP/2-GRAD(I))
+ 1300 CONTINUE
+      CALPRE = CALC/PRED
+      IF( CALPRE.LT..25 )THEN
+         HVAL = SIZE/2
+      ELSEIF( CALPRE.GT..75 )THEN
+         IF( DIA.GT.0.D0 )HVAL = SIZE*2
+C---WAS CONSTRAINT ACTIVE ?; IF THIS IS THE CASE, INCREASE STEP
+      ELSE
+         HVAL = SIZE
+      ENDIF
+      RES = OBNEW
+      IF( DEBUG )WRITE(*,9020)HVAL , CALPRE , GMAX , OBNEW
+      GOTO 700
+ 9010 FORMAT(' DIST ',F6.2,' RAT = ',F7.2,' OBF ',D10.3)
+ 9020 FORMAT(' HVAL = ',F7.3,' CALP = ',F7.3,' GMAX = ',D10.2,' OBF = ',
+     &       D10.3)
+      END
+      SUBROUTINE SOLRAC(N,X,Y,Z,VECT,V)
+C
+C     SOLVE IS A RACHFORD-RICE ROUTINE  TO SOLVE FOR PHASE FRACTION,
+C     GIVEN K-FACTORS
+C
+C     N         (I)     NO. OF COMPONENTS
+C     X         (O)     CALCULATED X-PHASE MOLEFRACTIONS
+C     Y         (O)     CALCULATED Y-PHASE MOLEFRACTIONS
+C     Z         (I)     FEED MOLE FRACTIONS
+C     VECT      (I)     LOG K-FACTORS
+C     V         (O)     CALCULATED Y-PHASE FRACTION
+C
+      IMPLICIT REAL*8(A-H,O-Z)
+      PARAMETER(MAXC=50)
+      DIMENSION X(MAXC) , Y(MAXC) , Z(MAXC) , VECT(MAXC) , E(MAXC)
+     & , E1(MAXC)
+      S1 = 0.
+      S2 = 0.
+      DO 100 I = 1 , N
+         F = DEXP(VECT(I))
+         S1 = S1 + F*Z(I)
+         S2 = S2 + Z(I)/F
+         E(I) = F
+         E1(I) = F - 1
+ 100  CONTINUE
+      IF( S1.GT.1. .AND. S2.GT.1. )THEN
+ 150     F = 0.
+         DF = 0.
+         DO 200 I = 1 , N
+            TN = 1 + V*E1(I)
+            R = E1(I)/TN
+            RZ = R*Z(I)
+            F = F + RZ
+            DF = DF + R*RZ
+ 200     CONTINUE
+         DEL = F/DF
+         VN = V + DEL
+         IF( VN.LE.0. )VN = V/2
+         IF( VN.GE.1. )VN = (1+V)/2
+         IF( DABS(VN-V).GE.1.D-8 )THEN
+            V = VN
+            GOTO 150
+         ENDIF
+      ELSE
+         V = 0.
+         IF( S1.GT.1. )V = 1.
+      ENDIF
+      DO 300 I = 1 , N
+         X(I) = Z(I)/(1+V*E1(I))
+         Y(I) = E(I)*X(I)
+ 300  CONTINUE
+      RETURN
+      END
+      SUBROUTINE SOLMIN(NCOMP,ISTAT,T,P,X,Y,Z,ZX,ZY,OBAS,DEBUG)
+      IMPLICIT REAL*8(A-H,O-Z)
+      PARAMETER(MAXC=50,ITMAX=20)
+      PARAMETER(CNTOL=1.D-7)
+C
+C     PURPOSE OF ROUTINE: TO MINIMIZE GIBBS-ENERGY USING THE
+C     RESTRICTED STEP ALGORITHM
+C
+C     NCOMP     (I)     NO. OF COMPONENTS IN MIXTURE
+C     ISTAT     (O)     RESULT OF CALC.; ISTAT=0: CONVERGED
+C     T         (I)     TEMPERATURE
+C     P         (I)     PRESSURE
+C     X         (IO)    LIQUID FLOW
+C     Y         (IO)    VAPOUR FLOW
+C     Z         (I)     FEED
+C     ZX        (O)     LIQUID COMPRESSIBILITY
+C     ZY        (O)     VAPOUR COMPRESSIBILITY
+C     OBAS      (I)     SINGLE PHASE GIBBS ENERGY
+C
+C     LOCALS
+C
+      DIMENSION X(MAXC) , Y(MAXC) , Z(MAXC)
+      DIMENSION YOLD(MAXC) , DIA(MAXC) , GRAD(MAXC) , XV1(MAXC) ,
+     &          XV2(MAXC) , DALFA(MAXC) , XOLD(MAXC) , FH(MAXC,MAXC) ,
+     &          FDUP(MAXC,MAXC)
+      COMMON /LPROP / FGX(MAXC) , FXT(MAXC) , FXP(MAXC) , DFX(MAXC,MAXC)
+     &                 , AUXX(MAXC)
+      COMMON /VPROP / FGY(MAXC) , FYT(MAXC) , FYP(MAXC) , DFY(MAXC,MAXC)
+     &                 , AUXY(MAXC)
+      LOGICAL DEBUG
+C
+C     MINIMIZATION ROUTINE
+C
+C     DIRECT SUBSTITUTION TO INITIATE
+C
+      ISTAT = 0
+C
+C     HEBDEN OPTIMIZATION; SET MAX. STEP AND START
+C
+      CALL SUM(NCOMP,Y,SY,0)
+      FRAC = SY
+      CNTR = FRAC
+      IF( CNTR.GT..5D0 )CNTR = 1 - CNTR
+      HVAL = CNTR/2
+      TOL = .1
+      ITER = 0
+ 100  ITER = ITER + 1
+      IF( ITER.GT.ITMAX )RETURN
+C
+C     PROPERTIES
+C
+      CALL TERMO(3,0,IC,T,P,ZX,X,FGX,FXT,FXP,DFX,AUXX)
+      CALL TERMO(3,0,IC,T,P,ZY,Y,FGY,FYT,FYP,DFY,AUXY)
+      SUMX = 0.D0
+      SUMY = 0.D0
+      DO 200 I = 1 , NCOMP
+         SUMX = SUMX + X(I)
+         SUMY = SUMY + Y(I)
+ 200  CONTINUE
+C
+C     VAP TREATED AS UNKNOWN IN DIFFERENTIATION
+C
+      FAC = SUMX*SUMY
+      GIBBS = 0.D0
+      GMAX = 0.D0
+C
+C     CALCULATE GRADIENT,HESSIAN AND OBJECTIVE FUNCTION
+C
+      DO 300 I = 1 , NCOMP
+         YOLD(I) = Y(I)
+         XOLD(I) = X(I)
+         XI = X(I)/SUMX
+         YI = Y(I)/SUMY
+         ZI = Z(I)
+         IF( ZI.GT.0.D0 )THEN
+            DIA(I) = DSQRT(Z(I)/(XI*YI))
+            XACT = DLOG(XI) + FGX(I)
+            YACT = DLOG(YI) + FGY(I)
+            DD = DABS(YACT-XACT)
+            IF( DD.GT.GMAX )GMAX = DD
+            GRAD(I) = -FAC*(YACT-XACT)/DIA(I)
+            GIBBS = GIBBS + X(I)*XACT + Y(I)*YACT
+         ELSE
+            DIA(I) = 1
+            GRAD(I) = 0.D0
+         ENDIF
+ 300  CONTINUE
+      DO 400 I = 1 , NCOMP
+         ZI = Z(I)
+         DI = 1.D0/DIA(I)
+         DO 350 J = 1 , I
+            IF( ZI.EQ.0.D0 .OR. Z(J).EQ.0.D0 )THEN
+               TERM = 0.D0
+            ELSE
+               TERM = SUMY*DFX(I,J) + SUMX*DFY(I,J) - 1.D0
+               TERM = TERM*DI/DIA(J)
+            ENDIF
+            FH(I,J) = TERM
+            FH(J,I) = TERM
+ 350     CONTINUE
+         FH(I,I) = FH(I,I) + 1
+ 400  CONTINUE
+      OBFO = GIBBS
+C
+C     CHECK FOR CONVERGENCE USING LARGEST ELEMENT OF GRADIENT
+C
+      IF( GMAX.LT.CNTOL )RETURN
+      DIAG = 0.D0
+C
+C     DIACOR CALCULATES STEP USING HEBDENS ITERATION
+C
+      LOOP = 0
+ 500  CALL DIACOR(NCOMP,MAXC,FH,FDUP,GRAD,HVAL,TOL,DIAG,DALFA,XV1,XV2,
+     &            SIZE)
+      LOOP = LOOP + 1
+      DO 600 I = 1 , NCOMP
+         DD = DALFA(I)/DIA(I)
+         YOLDI = YOLD(I)
+         XOLDI = XOLD(I)
+C
+C     CORRECT THE SMALLER VALUE
+C
+         YNEW = YOLDI + DD
+         XNEW = XOLDI - DD
+         IF( YNEW.LT.XNEW )THEN
+            YLIM = .5D0*YOLDI
+            IF( YNEW.LE.YLIM )THEN
+               YNEW = YLIM
+               DD = -YLIM
+            ENDIF
+            Y(I) = YNEW
+            X(I) = Z(I) - YNEW
+         ELSE
+            XLIM = .5D0*XOLDI
+            IF( XNEW.LE.XLIM )THEN
+               XNEW = XLIM
+               DD = XLIM
+            ENDIF
+            X(I) = XNEW
+            Y(I) = Z(I) - XNEW
+         ENDIF
+         DALFA(I) = DD*DIA(I)
+ 600  CONTINUE
+C
+C     TEST RESULT OF CALCULATION
+C
+      OBNEW = 0
+      CALL TERMO(1,0,IC,T,P,ZX,X,FGX,FXT,FXP,DFX,AUXX)
+      CALL TERMO(1,0,IC,T,P,ZY,Y,FGY,FYT,FYP,DFY,AUXY)
+      SUMX = 0.D0
+      SUMY = 0.D0
+      DO 700 I = 1 , NCOMP
+         SUMX = SUMX + X(I)
+         SUMY = SUMY + Y(I)
+ 700  CONTINUE
+C
+C     CALCULATE GRADIENT,HESSIAN AND OBJECTIVE FUNCTION
+C
+      DO 800 I = 1 , NCOMP
+         XI = X(I)/SUMX
+         YI = Y(I)/SUMY
+         IF( Z(I).GT.0. )THEN
+            XACT = DLOG(XI) + FGX(I)
+            YACT = DLOG(YI) + FGY(I)
+            OBNEW = OBNEW + X(I)*XACT + Y(I)*YACT
+         ENDIF
+ 800  CONTINUE
+C
+C     TEST FOR IMPROVEMENT; THE 1D-10 IS A 'SAFETY'TERM FOR ROUNDOFF
+C
+      IF( OBNEW.GT.OBFO+1.D-10 )THEN
+C----FAILURE
+         HVAL = SIZE/5
+         GOTO 500
+      ENDIF
+      CALC = OBNEW - OBFO
+      PRED = 0.D0
+      DO 900 I = 1 , NCOMP
+         SUMP = 0.D0
+         DO 850 J = 1 , NCOMP
+            SUMP = SUMP + FH(I,J)*DALFA(J)
+ 850     CONTINUE
+         PRED = PRED + DALFA(I)*(SUMP/2-GRAD(I))
+ 900  CONTINUE
+      PRED = PRED/FAC
+      CALPRE = CALC/PRED
+      IF( CALPRE.LT..25 )THEN
+         HVAL = SIZE/2
+      ELSEIF( CALPRE.GT..75 )THEN
+         IF( DIAG.GT.0.D0 )HVAL = SIZE*2
+C---WAS CONSTRAINT ACTIVE ?; IF THIS IS THE CASE, INCREASE STEP
+      ELSE
+         HVAL = SIZE
+      ENDIF
+      OCOR = OBNEW - OBAS
+      IF( DEBUG )WRITE(*,9010)ITER , LOOP , SUMY , HVAL , CALPRE ,
+     &                        GMAX , OCOR
+      GOTO 100
+ 9010 FORMAT(' IT',I2,' LOOP',I2,' VAPF ',F6.4,' SMX ',F5.3,' C/P ',
+     &      F5.2, ' GMAX ',D10.2,' DG/RT ',D10.3)
+      END
+      SUBROUTINE STASUB(NCOMP,T,P,Z,YLOG,Y,YLNEW,ERR,FUGZ,ESQ,GMAX,
+     &                  OBFUN)
+      IMPLICIT REAL*8(A-H,O-Z)
+C
+C     PURPOSE: MINIMIZE TANGENT PLANE DISTANCE BY DIRECT SUBSTITUTION
+C
+C     NCOMP     (I):    NO. OF COMPONENTS IN MIXTURE
+C     T,P       (I):    SPECIFIED TEMPERATURE AND PRESSURE
+C     YLOG      (I):    LOG TRIAL PHASE COMPOSITION
+C     Y         (O):    TRIAL PHASE COMPOSITION
+C     YLNEW     (O):    NEW LOG TRIAL PHASE COMPOSITION
+C     ERR       (O):    YLNEW-YLOG
+C     FUGZ      (I):    LOG (Z(I)*FUG(I) FOR Z-PHASE)
+C     ESQ       (O):    SQUARED NORM OF CORRECTION
+C     GMAX      (O):    MAX. CORRECTION
+C     OBFUN     (O):    VALUE OF OBJECTIVE FUNCTION
+C
+      PARAMETER (MAXC=50)
+      DIMENSION YLOG(MAXC) , Y(MAXC) , Z(MAXC) , YLNEW(MAXC) , ERR(MAXC)
+     &            , FUGZ(MAXC)
+      COMMON /VPROP / FGY(MAXC) , FYT(MAXC) , FYP(MAXC) , DFY(MAXC,MAXC)
+     &                 , AUXY(MAXC)
+      DO 100 I = 1 , NCOMP
+         IF( Z(I).EQ.0.D0 )THEN
+            Y(I) = 0.D0
+         ELSE
+            Y(I) = DEXP(YLOG(I))
+         ENDIF
+ 100  CONTINUE
+C----CALCULATE PROPERTIES
+      CALL TERMO(1,0,IC,T,P,ZY,Y,FGY,FYT,FYP,DFY,AUXY)
+      OBFUN = 1.D0
+      GMAX = 0.
+      ESQ = 0.D0
+      DO 200 I = 1 , NCOMP
+         DIFF = 0.D0
+         IF( Z(I).NE.0. )DIFF = FUGZ(I) - FGY(I)
+         YLNEW(I) = DIFF
+         DIFF = DIFF - YLOG(I)
+         ESQ = ESQ + Y(I)*DIFF*DIFF
+         IF( DABS(DIFF).GT.GMAX )GMAX = DABS(DIFF)
+         ERR(I) = DIFF
+         OBFUN = OBFUN - Y(I)*(DIFF+1)
+ 200  CONTINUE
+      RETURN
+      END
+      SUBROUTINE VCOPY(N,X,Y)
+      IMPLICIT REAL*8(A-H,O-Z)
+C
+C     COPIES N-ELEMENT VECTOR X INTO Y
+C
+      PARAMETER (MAXC=50)
+      DIMENSION X(MAXC) , Y(MAXC)
+      DO 100 I = 1 , N
+         Y(I) = X(I)
+ 100  CONTINUE
+      RETURN
+      END
+      SUBROUTINE DIRSUB(NCOMP,T,P,X,Y,Z,VECT,VNEW,FRAC,ERR,ESQ,GMAX,
+     &                  FUGZ,TPDX,TPDY,OBFUN,ZX,ZY)
+      IMPLICIT REAL*8(A-H,O-Z)
+C
+C     PURPOSE: MINIMIZE GIBBS ENERGY BY DIRECT SUBSTITUTION
+C
+C     NCOMP     (I):    NO. OF COMPONENTS IN MIXTURE
+C     T,P       (I):    SPECIFIED TEMPERATURE AND PRESSURE
+C     X,Y       (O):    LIQUID AND VAPOUR PHASE COMPOSITION
+C     Z         (I):    FEED COMPOSITION
+C     VECT      (I):    LOG K-FACTORS
+C     VNEW      (O):    REVISED LOG -K-FACTORS
+C     FRAC     (IO):    VAPOUR FRACTION
+C     ERR       (O):    DIFFERENCE BETWEEN VNEW AND VECT
+C     ESQ       (O):    SQUARED NORM OF CORRECTION
+C     GMAX      (O):    MAX. CORRECTION
+C     FUGZ      (I):    LOG (Z*FUG) FOR FEED
+C     TPDX      (O):    X-PHASE TANGENT PLANE DISTANCE
+C     TPDY      (O):    Y-PHASE TANGENT PLANE DISTANCE
+C     OBFUN     (O):    VALUE OF OBJECTIVE FUNCTION
+C     ZX,ZY     (O):    X- AND Y-PHASE COMPRESSIBILITY FACTORS
+C
+      PARAMETER(MAXC=50)
+      DIMENSION Z(MAXC) , Y(MAXC) , X(MAXC) , VECT(MAXC) ,
+     &          VNEW(MAXC) , ERR(MAXC) ,FUGZ(MAXC)
+      COMMON /LPROP / FGX(MAXC) , FXT(MAXC) , FXP(MAXC) , DFX(MAXC,MAXC)
+     &                 , AUXX(MAXC)
+      COMMON /VPROP / FGY(MAXC) , FYT(MAXC) , FYP(MAXC) , DFY(MAXC,MAXC)
+     &                 , AUXY(MAXC)
+C-----GET PHASE COMPOSITIONS
+      CALL SOLRAC(NCOMP,X,Y,Z,VECT,FRAC)
+      FLIQ = 1.D0 - FRAC
+C----GET NEW PROPERTIES
+      CALL TERMO(1,0,IC,T,P,ZX,X,FGX,FXT,FXP,DFX,AUXX)
+      CALL TERMO(1,0,IC,T,P,ZY,Y,FGY,FYT,FYP,DFY,AUXY)
+      GMAX = 0.D0
+      ESQ = 0.D0
+      DO 100 I = 1 , NCOMP
+         DIFF = FGX(I) - FGY(I)
+         ERRO = DIFF - VECT(I)
+         IF( DABS(ERRO).GT.GMAX )GMAX = DABS(ERRO)
+         ESQ = ESQ + Z(I)*(ERRO*ERRO)
+         ERR(I) = ERRO
+         VNEW(I) = DIFF
+ 100  CONTINUE
+      TPDX = 0.
+      TPDY = 0.
+      DO 200 I = 1 , NCOMP
+         XI = X(I)
+         YI = Y(I)
+         FGZI = FUGZ(I)
+         IF( Z(I).GT.0.D0 )THEN
+            TPDX = TPDX + XI*(DLOG(XI)+FGX(I)-FGZI)
+            TPDY = TPDY + YI*(DLOG(YI)+FGY(I)-FGZI)
+         ENDIF
+ 200  CONTINUE
+      OBFUN = FRAC*TPDY + FLIQ*TPDX
+      RETURN
+      END
+      SUBROUTINE LDLDEC(ND,N,A,VEC,NTYP)
+C
+C     LDLDEC DECOMPOSES A SYMMETRIC POSITIVE DEFINITE MAXTRIX
+C     AND OPTIONALLY BACKSUBSTITUTES FOR THE SOLUTION AF AX=VEC
+C
+C     ND:       ROW DIMENSION OF A
+C     N:        ACTUAL SIZE OF A
+C     A:        MTRIX TO BE DECOMPOSED; A MUST BE FILLED
+C     VEC:      RHS-VECTOR, REPLACED BY SOLUTION
+C     NTYP:     0: DEC.- AND SOLVE; 1: DEC. ONLY; 2: SOLVE ONLY
+C
+      IMPLICIT REAL*8(A-H,O-Z)
+      PARAMETER (MAXC=50)
+      DIMENSION A(ND,MAXC),VEC(MAXC)
+      IF (NTYP.EQ.2) GO TO 100
+C
+C     DECOMPOSITION
+C
+      DO 10 I=1,N
+C
+C     NOTE: PRIMARY DEC. STORED IN LOWER TRIANGLE;
+C     UNIT TRIANGULAR MATRIX IN UPPER TRIANGLE
+C
+      IF (I.GT. 1) THEN
+        DO 20 K=I,N
+        XX=A(K,I)
+        DO 25 J=1,I-1
+   25   XX=XX-A(J,I)*A(K,J)
+        A(K,I)=XX
+   20   CONTINUE
+      ENDIF
+      IF (I.LT. N) THEN
+         XX=1.D0/A(I,I)
+         DO 30 K=I+1,N
+   30    A(I,K)=A(K,I)*XX
+      ENDIF
+   10 CONTINUE
+      IF (NTYP.EQ.1) RETURN
+  100 CONTINUE
+C---BACKSUBSTITUTION
+C     USING TRANSPOSED MATRICES
+C
+      IF (N.GT. 1) THEN
+      DO 110 I=2,N
+         XX=VEC(I)
+         DO 120 J=1,I-1
+  120    XX=XX-A(J,I)*VEC(J)
+  110    VEC(I)=XX
+      ENDIF
+      DO 150 I=N,1,-1
+      XX=VEC(I)
+      IF (I.NE. N) THEN
+         DO 155 J=I+1,N
+  155    XX=XX-A(J,I)*VEC(J)
+      ENDIF
+  150 VEC(I)=XX/A(I,I)
+      RETURN
+      END
+
+
+
+      SUBROUTINE TEMSET(T)
+      IMPLICIT REAL*8(A-H,O-Z)
+      PARAMETER(MAXC=50,MC2=MAXC*MAXC)
+      COMMON /STYR  / NCOMP , NDER , NTEMP
+      COMMON /OVER  / AC(MAXC) , Q(MAXC) , TSQR(MAXC)
+      COMMON /PAR   / CK(MC2) , BC(MAXC) , AC0(MAXC) , AC1(MAXC) ,
+     &                AC2(MAXC)
+      SAVE TOLD
+      DATA TOLD/0.D0/
+      IF( T.EQ.TOLD )RETURN
+      TOLD = T
+      SQT = DSQRT(T)
+      T2R = 1.D0/T/2
+      T2RF = -3*T2R
+      DO 100 I = 1 , NCOMP
+         ALF = TSQR(I)
+         Q1 = AC(I)*(1+Q(I))/SQT
+         AC0(I) = Q1 - AC(I)*Q(I)*ALF
+         AC1(I) = -Q1*T2R
+         AC2(I) = T2RF*AC1(I)
+ 100  CONTINUE
+      RETURN
+      END
+
+      SUBROUTINE CUBGEN(MT,IC,T,P,Z,XX,FG,FT,FP,FX,AUX)
+      IMPLICIT REAL*8(A-H,O-Z)
+      PARAMETER (MAXC=50,MC2=MAXC*MAXC)
+C-----dummy variables
+      DIMENSION XX(MAXC),FG(MAXC),FT(MAXC),FP(MAXC),FX(MAXC,MAXC)
+     &   ,AUX(MAXC)
+C-----local variables
+      DIMENSION X(MAXC),PD(MAXC),AD1(MAXC),ADT(MAXC)
+      COMMON /STYR  / NCOMP,NDER,NTEMP
+      COMMON /PAR   / CK(MC2),BC(MAXC),AC0(MAXC),AC1(MAXC),AC2(MAXC)
+      COMMON /CUB   / C,C1,C2
+      CALL TEMSET(T)
+      SUM = 0.
+      DO 100 I = 1,NCOMP
+         SUM = SUM + XX(I)
+  100 CONTINUE
+      DO 200 I = 1,NCOMP
+         X(I) = XX(I)/SUM
+  200 CONTINUE
+      CALL ANEW(X,A,AT,ATT,B,AD1,ADT)
+      APT = A*P/T
+      BPT = B*P/T
+      CALL CUBIC(MT,APT,BPT,Z,Z2,GDER)
+C-------second z and energy diff. stored in aux(1),aux(2)
+      AUX(1) = Z2
+      AUX(2) = GDER
+      IC = 1
+      TL = 1 - BPT*C - 3*Z
+      IF ( MT.EQ.0 .AND. TL.GT.0. ) IC = 2
+      IF ( MT.EQ.0 .AND. TL.LT.0. ) IC = -2
+      IF ( MT*TL.LT.0. ) IC = -1
+C------v = volume/r
+      V = Z*T/P
+      S1 = 1./(V+C1*B)
+      S2 = 1./(V+C2*B)
+      P1 = P/T + A*S1*S2
+      PA = -S1*S2
+      PN = P1
+      FAC = C1*S1 + C2*S2
+      P2 = A*PA
+      PB = P1*P1 - FAC*P2
+C------ derivative is d(p/t) / d(v/r)
+      DPDV = -P1*P1 - P2*(S1+S2)
+      AUX(8) = DPDV*T
+      XL1 = DLOG(V*P1)
+      FN = XL1
+      XL2 = DLOG(S1/S2)/(C2-C1)
+      FA = -XL2/B
+      FA2 = FA+FA
+      F2 = -A*FA
+      FF = FN - F2
+      GB = -V*PA
+      F2B = (A*GB-F2)/B
+      FB = P1 - F2B
+      FNB = P1
+      FAB = -F2B/A
+      GBB = -GB*FAC
+      F2BB = (A*GBB-2*F2B)/B
+      FBB = P1*P1 - F2BB
+      XLZ = DLOG(Z)
+      FNP = FN - XLZ
+      IF ( NTEMP.NE.0 ) THEN
+         DFT = FA*AT
+         HE = -T*DFT + Z - 1
+         HE = HE*T
+C------excess enthalpy/r stored in aux(3)
+         AUX(3) = HE
+         SE = -T*DFT - FF + XLZ
+C------excess entropy/r stored in aux(4)
+         AUX(4) = SE
+         PTR = PA*AT
+         DPDT = P/T + T*PTR
+         IF ( NTEMP.GE.2 ) THEN
+            FTT = FA*ATT
+            CP = -T*(T*FTT+2*DFT) - DPDT**2/DPDV - 1
+C------excess heat capacity/r in aux(5)
+            AUX(5) = CP
+            DVDT = -DPDT/DPDV/T
+C---- aux(6) is pressure derivative of resid. entropy
+            AUX(6) = -DVDT + 1/P
+C-----aux(7) is pressure derivative of enthalpy
+            AUX(7) = -T*DVDT + V
+            AUX(9) = DVDT
+         ENDIF
+      ENDIF
+      IF ( NDER.NE.0 ) THEN
+         DO 250 I = 1,NCOMP
+            FG(I) = FNP + FA*AD1(I) + FB*BC(I)
+  250    CONTINUE
+         IF ( NDER.GE.2 .OR. NTEMP.NE.0 ) THEN
+            DO 260 I = 1,NCOMP
+               PD(I) = (PN+PA*AD1(I)+PB*BC(I))/DPDV
+  260       CONTINUE
+            IF ( NDER.GE.2 ) THEN
+               NADR = 0
+               DO 270 I = 1,NCOMP
+                  PDI = PD(I)
+                  CC = 1 + FNB*BC(I) + PN*PDI
+                  CA = FAB*BC(I) + PA*PDI
+                  CB = FNB + FAB*AD1(I) + FBB*BC(I) + PB*PDI
+                  SDER = FA2*AC0(I)
+                  DO 265 J = I,NCOMP
+                     NADR = NADR + 1
+                     TERM  = CC + CA*AD1(J) + CB*BC(J) +
+     &                       SDER*AC0(J)*(1.D0-CK(NADR))
+                     FX(I,J) = TERM
+                     FX(J,I) = TERM
+  265             CONTINUE
+  270          CONTINUE
+            ENDIF
+            IF ( NTEMP.NE.0 ) THEN
+               CC = 1./T
+               CB = FAB*AT
+               DPDTT = DPDT/T
+               DO 280 I = 1,NCOMP
+                  FP(I) = -PD(I)/T - 1./P
+                  FT(I) = CC + CB*BC(I) + FA*ADT(I) + DPDTT*PD(I)
+  280          CONTINUE
+            ENDIF
+         ENDIF
+      ENDIF
+      RETURN
+      END
+CmlmANEW.FOR
+      SUBROUTINE ANEW(X,A0,AT,ATT,B0,AD1,ADT)
+      IMPLICIT REAL*8(A-H,O-Z)
+      PARAMETER (MAXC=50,MC2=MAXC*MAXC)
+      DIMENSION X(MAXC),AD1(MAXC),ADT(MAXC)
+      DIMENSION AX0(MAXC),AX1(MAXC),AS1(MAXC),AST1(MAXC),AX2(MAXC)
+      COMMON /STYR  / NCOMP,NDER,NTEMP
+      COMMON /PAR   / CK(MC2),BC(MAXC),AC0(MAXC),AC1(MAXC),AC2(MAXC)
+      S0 = 0.
+      S1 = 0.
+      S2 = 0.
+      DO 100 I = 1,NCOMP
+         XI = X(I)
+         AS1(I) = 0.
+         AX0(I) = XI*AC0(I)
+         IF ( NTEMP.NE.0 ) THEN
+C------ntemp=0: no temp. derivatives
+            AST1(I) = 0.
+            AX1(I) = XI*AC1(I)
+            S1 = S1 + AX1(I)
+            IF ( NTEMP.NE.1 ) THEN
+C------ntemp=1: no sec. temp derivatives
+               AX2(I) = XI*AC2(I)
+               S2 = S2 + AX2(I)
+            ENDIF
+         ENDIF
+         S0 = S0 + AX0(I)
+  100 CONTINUE
+      NADR = 0
+      S02 = S0+S0
+      GSM = S0*S2 + S1*S1
+      DO 200 I = 1,NCOMP
+         FAC = 2*AC0(I)
+         AD1(I) = S0*FAC
+         IF ( NTEMP.NE.0 ) ADT(I) = FAC*S1 + S02*AC1(I)
+  200 CONTINUE
+      NADR = 0
+      DO 300 I = 1,NCOMP-1
+C-----double loop for a-parameter
+        K1 = I + 1
+        NADR = NADR + 1
+        XI = X(I)
+        AX0I = AX0(I)
+        IF ( NTEMP.NE.0. ) AX1I = AX1(I)
+        DO 220 K = K1,NCOMP
+           NADR = NADR + 1
+           EF = CK(NADR)
+           IF ( EF.NE.0. ) THEN
+              AS1(I) = AS1(I) + AX0(K)*EF
+              AS1(K) = AS1(K) + AX0I*EF
+              IF ( NTEMP.NE.0 ) THEN
+                 AST1(I) = AST1(I) + AX1(K)*EF
+                 AST1(K) = AST1(K) + AX1I*EF
+              ENDIF
+           ENDIF
+  220   CONTINUE
+  300 CONTINUE
+      DO 400 I = 1,NCOMP
+         FAC = 2*AC0(I)
+         AD1(I) = AD1(I) - FAC*AS1(I)
+         IF ( NTEMP.NE.0 ) THEN
+            ADT(I) = ADT(I) - 2*AC1(I)*AS1(I) - FAC*AST1(I)
+            IF (NTEMP .GT. 1) GSM = GSM -(AX2(I)*AS1(I)+AX1(I)*AST1(I))
+         ENDIF
+  400 CONTINUE
+      A0 = 0
+      AT = 0.
+      IF (NTEMP .GT. 1) ATT=2*GSM
+      DO 450 I=1,NCOMP
+      XI2 = .5D0*X(I)
+      A0 = A0 +AD1(I)*XI2
+      IF (NTEMP .GT. 0) AT = AT + XI2*ADT(I)
+  450 CONTINUE
+      B0 = 0.
+C------ here used: single sum in b
+      DO 500 I = 1,NCOMP
+         B0 = B0 + X(I)*BC(I)
+  500 CONTINUE
+      RETURN
+      END
+      SUBROUTINE TERMO(ICON,NTYP,MTYP,T,P,ZZ,Z,FG,FT,FP,FX,AUX)
+      IMPLICIT REAL*8(A-H,O-Z)
+      PARAMETER(MAXC=50)
+      DIMENSION Z(MAXC) , FG(MAXC) , FT(MAXC) , FP(MAXC) ,
+     & FX(MAXC,MAXC) , AUX(MAXC)
+      COMMON /STYR  / NCOMP , NDER , NTEMP
+      NTEMP = 0
+      NDER = 1
+      IF( ICON.GT.2 )NDER = 2
+      IF( ICON.EQ.2 .OR. ICON.GT.3 )NTEMP = 1
+      IF( ICON.GT.4 )NTEMP = 2
+      CALL CUBGEN(NTYP,MTYP,T,P,ZZ,Z,FG,FT,FP,FX,AUX)
+      RETURN
+      END
+**==CUBIC.FOR
+CmlmCUBIC.FOR
+      SUBROUTINE CUBIC(MTYP,A,B,Z,ZV2,DELG)
+C------z is desired root; zv2 is the other root; delg is g-difference
+      IMPLICIT REAL*8(A-H,O-Z)
+      COMMON /CUB   / C , C1 , C2
+      ZV2 = 0.
+      DELG = 0.
+      BC = B*C
+      X2 = 1 - BC
+      X1 = A - B*(1+B+C+2*BC)
+      X0 = B*(A-BC*(1+B))
+      Z = X2/3
+      F = ((Z-X2)*Z+X1)*Z - X0
+      Z = B
+      IF( F.LT.0. .OR. B.GT.X2/3 )Z = Z + 1
+ 100  DF2 = 3*Z - X2
+      DF1 = Z*(DF2-X2) + X1
+      F = ((Z-X2)*Z+X1)*Z - X0
+      DZ = F/DF1
+      DZ = DZ*(1+DZ*DF2/DF1)
+      Z = Z - DZ
+      IF( DABS(DZ).GT.1.D-10 )GOTO 100
+      IF( MTYP*DF2.GE.0. )THEN
+         E1 = Z - X2
+         E0 = Z*E1 + X1
+         D = E1*E1 - 4*E0
+         IF( D.GE.0. )THEN
+            Z1 = (DABS(E1)+DSQRT(D))/2
+            IF( E1.GT.0. )Z1 = -Z1
+            IF( Z.GT.Z1 )Z1 = E0/Z1
+            DF2 = 3*Z1 - X2
+            DF1 = Z1*(DF2-X2) + X1
+            F = ((Z1-X2)*Z1+X1)*Z1 - X0
+            DZ = F/DF1
+            DZ = DZ*(1+DZ*DF2/DF1)
+            Z1 = Z1 - DZ
+            IF( Z1.GE.B )THEN
+               IF( MTYP.EQ.0 )THEN
+C-----calculate excess gibbs energy difference for multiple solutions
+                  F = DLOG((Z-B)/(Z1-B)) + A/B/(C2-C1)
+     &                *DLOG((Z+C2*B)*(Z1+C1*B)/(Z+C1*B)/(Z1+C2*B))
+     &                 - (Z-Z1)
+                  DELG = DABS(F)
+                  ZV2 = Z1
+                  IF( F.LT.0. )THEN
+                     ZV2 = Z
+                     Z = Z1
+                  ENDIF
+               ELSEIF( MTYP.EQ.1 )THEN
+                  IF( Z1.LT.Z )Z = Z1
+               ELSE
+                  IF( Z1.GT.Z )Z = Z1
+               ENDIF
+            ENDIF
+         ENDIF
+      ENDIF
+      RETURN
+      END
+
+
+      SUBROUTINE DENSITY(NC,ZX,T,P,AMW,TC,PC,VC,AC,KIJ,LDEN,TDEN,ZRA,
+     &                   DEN,DENM,VOL)
+C
+C NC: NUMBER OF COMPONENTS
+C ZX:MOLE FRACTION
+C T: TEMPERATURE, K
+C P: PRESSURE, BAR
+C AMW: MOLECULAR WEIGHT
+C TC: CRITICAL TEMPERATURE, K
+C PC: CRITICAL PRESSURE, BAR
+C VC: CRITICAL VOLUME, CM^3/MOL
+C AC: ACCENTRIC FACTOR
+C LDEN: LIQUID DENSITY AT GIVEN TEMPERATURE TDEN(K),P=1 ATM,G/CM^3
+C DEN(I): DENSITY OF PURE COMPONENT I AT T, P, G/CM^3
+C DENM: DENSITY OF MIXTURE AT T AND P, G/CM^3
+C VOL: MOLAR VOLUME, CM^3/MOL
+      implicit integer (i-n)
+      implicit real*8 (a-h,o-z)
+      real*8 LDEN,KIJ
+      PARAMETER (RG=8.31434D-5,one=1.0d0,zero=0.0d0)
+      dimension ZX(50),AMW(50),TC(50),PC(50),VC(50),AC(50),
+     &          LDEN(50),TDEN(50),DEN(50),KIJ(50,50)
+      dimension VP(50),VOL0(50),VOL1(50),FZ(50),DEN1(50)
+      dimension ZRA(50),VRK(50),CKS(50)
+      P0=1.01325D0
+      IFASE=1
+      DO 20 I=1,NC
+      IF(ZRA(I).GT.0.0D0) THEN
+          IF(T.GT.TC(I)) THEN
+          CKS(I)=RG*TC(I)/PC(I)*(0.307d0-ZRA(I))
+          ELSE
+              IF(AMW(I).LT.400.0D0) THEN
+              CALL VAPORP(T,TC(I),PC(I),AC(I),VP(I))
+              ELSE
+              VP(I)=P0
+              ENDIF
+            CALL  prfuga1(IFASE,T,VP(I),TC(I),PC(I),AC(I),V,FZ(I))
+            DENP=1.0D6/V
+            VOL0(I)=1.0D0/DENP
+            VRK(I)=RG*TC(I)/PC(I)*
+     &        ZRA(I)**(ONE+DABS(ONE-T/TC(I))**(2.d0/7.d0))
+            CKS(I)=VOL0(I)-VRK(I)
+          ENDIF
+      ELSE
+          IF(AMW(I).LT.400.0D0) THEN
+          CALL VAPORP(TDEN(I),TC(I),PC(I),AC(I),VP(I))
+          ELSE
+          VP(I)=P0
+          ENDIF
+C          WRITE(*,*) 'VAPOR PRESSURE=',VP(I)
+        CALL  prfuga1(IFASE,TDEN(I),VP(I),TC(I),PC(I),AC(I),V,FZ(I))
+        VOL0(I)=V*1.0D-6
+        CALL  prfuga1(IFASE,TDEN(I),P0,TC(I),PC(I),AC(I),V,FZ(I))
+        DENP=1.0D6/V
+        ZRA(I)=1.0d-6*PC(I)*VC(I)/(RG*TC(I))
+C      WRITE(*,*) ZRA(I),'ZRA'
+15      VRK(I)=RG*TC(I)/PC(I)*
+     &           ZRA(I)**(ONE+DABS(ONE-TDEN(I)/TC(I))**(2.d0/7.d0))
+        CKS(I)=VOL0(I)-VRK(I)
+        IF(T.GT.TC(I))  CKS(I)=RG*TC(I)/PC(I)*(0.307d0-ZRA(I))
+        VOL1(I)=1.D6*(1.0d0/DENP-CKS(I))
+        DEN1(I)=AMW(I)/VOL1(I)
+        F=DEN1(I)-LDEN(I)
+        DZRA=ZRA(I)*(1.0D0+1.0D-6)
+        VRK(I)=RG*TC(I)/PC(I)*
+     &                 DZRA**(ONE+DABS(ONE-TDEN(I)/TC(I))**(2.d0/7.d0))
+        CKS(I)=VOL0(I)-VRK(I)
+        IF(T.GT.TC(I))  CKS(I)=RG*TC(I)/PC(I)*(0.307d0-DZRA)
+        VOL1(I)=1.D6*(1.0d0/DENP-CKS(I))
+        DEN1(I)=AMW(I)/VOL1(I)
+        F1=DEN1(I)-LDEN(I)
+        DF=(F1-F)/(ZRA(I)*1.0D-6)
+        IF(DABS(F/LDEN(I)).GT.1.0D-8) THEN
+C      WRITE(*,*) DF,F1,F,'?'
+        ZRA(I)=ZRA(I)-F/DF
+        GOTO 15
+        ELSE
+        ENDIF
+      ENDIF
+C      WRITE(*,*) 'ZRA,CKS',ZRA(I),CKS(I)
+      CALL  prfuga1(IFASE,T,P,TC(I),PC(I),AC(I),V,FZ(I))
+      DENTP=1.0D6/V
+      VOL0(I)=1.0D0/DENTP
+      VOL1(I)=1.D6*(ONE/DENTP-CKS(I))
+      DENVS0=AMW(I)/VOL1(I)
+      DEN(I)=DENVS0
+C      WRITE(*,*) 'DENSITY', DEN(I)
+20    CONTINUE
+
+      IF (NC.EQ.1) GOTO 100
+      AVMW=0.0D0
+      SHIFTV=0.0D0
+      DO 30 I=1,NC
+      AVMW=AVMW+ZX(I)*AMW(I)
+      SHIFTV=SHIFTV+CKS(I)*ZX(I)
+30    CONTINUE
+      CALL PRFUGA(IFASE,T,P,NC,TC,PC,AC,ZX,KIJ,V,FZ)
+      DENX=1.D6/V
+      VO0=1.0D0/DENX
+      VOL=1.D6*(ONE/DENX-SHIFTV)
+      DENVS=AVMW/VOL
+      DENM=DENVS
+c      write(*,*) shiftv,avmw,vo0,denm,'shiftv'
+100   RETURN
+      end
+
+      SUBROUTINE VAPORP(T,TC,PC,AC,VPPR)
+      IMPLICIT INTEGER (I-N)
+      IMPLICIT REAL*8 (A-H,O-Z)
+      RG=8.31434D-5
+      P1=PC*DEXP(5.373D0*(1.0D0+AC)*(1.0D0-TC/T))
+C      WRITE(*,*) P1,PC,AC,TC,T,'?/'
+      IF(P1.LT.1.0D-6) THEN
+      VPPR=0.01D0
+      RETURN
+      ELSE
+      ENDIF
+      Nit=0
+10    Nit=Nit+1
+C      WRITE(*,*) NIT,P1,AC,TC,PC
+      CALL prfuga1(1,T,P1,TC,PC,AC,V1,F1)
+      VL=V1*1.0D-6
+      CALL prfuga1(0,T,P1,TC,PC,AC,V2,F2)
+      VV=V2*1.0D-6
+      dG=RG*T*(DLOG(F1)-DLOG(F2))
+      der=dG/(VL-VV)
+      P2=P1-der
+      if(P2.lt.0.0d0) then
+      Pnew=(P1+P2)/2.d0
+      else
+      Pnew=P2
+      endif
+c      pause
+      if (dabs(P1/Pnew-1.0).gt.1.d-6) then
+      P1=Pnew
+          IF(P1.LT.1.0D-6) THEN
+          VPPR=0.01D0
+          RETURN
+          ELSE
+          ENDIF
+      go to 10
+      else
+      endif
+      VPPR=P2
+      RETURN
+C      write(*,*) 'final',T,Nit,P1/P2-1.d0
+      END
+
+
+C     THIS SUBROUTINE SETS QUADRATURE POINTS AND WEIGHTS FOR A
+C                   GIVEN CONTINUOUS DISTRIBUTION
+C              (MOLECULAR WEIGHT OR NORMAL BOILING POINT)
+C       INPUT
+C              XI: INITIAL VALUE,MOLECULAR WEIGHT OR BOILING POINT
+C              XF: FINAL VALUE
+C              AVG: AVERAGE
+C              VAR2: SQUARE OF VARIENCE
+C              NQ: NUMBER OF QUADRATURE POINTS(<20)
+C       OUTPUT
+C              XQP(NQ): SPECIFIED VALUBLE AT EACH QUADRATURE POINT
+C              WFC(NQ): MOLE FRACTION OF EACH QUADRATURE POINT
+C=======================================================================
+      SUBROUTINE QUAD(XI,XF,AVG,VAR2,NQ,XQP,WFC,ADEN,DEN)
+      IMPLICIT REAL*8 (A-H,O-Z)
+      REAL*8 XI,XF,XQP
+      DIMENSION WFC(20),XQP(20),X(20),WT(20),DEN(20)
+      PI=4.D0*DATAN(1.D0)
+      IF (XF .LE. 0.D0) GO TO 10
+C
+C FOR DISCRETE INTERVAL (XI,XF), COMBINE BETA DISTRIBUTION
+C WITH CHEBYSHEV-GAUSS QUADRATURE
+C
+C  SCALE MEAN AND VARIANCE TO RANGE 0 < Y < 1
+C
+      DIF = XF- XI
+      YMN = (AVG-XI)/DIF
+      YVAR = VAR2/DIF**2
+      ALPH = YMN**2 * (1.D0 - YMN)/YVAR - YMN
+      BETA = ALPH * (1.D0/YMN - 1.D0)
+C
+C     DETERMINE WEIGHTING FACTORS AND QUAD POINTS FOR RANGE -1 < X < 1
+C     OBTAIN PROBABILITY DENSITIES AT QUADRATURE POINTS USING
+C     BETA DISTRIBUTION
+C
+      SUM=ALPH+BETA
+      CALL GAMGET(ALPH,GA)
+      CALL GAMGET(BETA,GB)
+      CALL GAMGET(SUM,GSUM)
+      DO I=1,NQ
+      X(I) = -DCOS ((2.D0*FLOAT(I) - 1.D0)*PI/(2.D0*NQ))
+      WT(I) = PI*DSQRT(1.D0 - X(I)**2)/(2.D0*NQ)
+      YI=(X(I)+1.0D0)/2.0D0
+      WFC(I)=WT(I)*GSUM*(YI**(ALPH-1.D0))
+     &       *((1.D0-YI)**(BETA-1.D0))/(GA*GB)
+      XQP(I) = DIF*X(I)/2.D0 + (XF+XI)/2.D0
+      ENDDO
+      GOTO 100
+
+C     FOR SEMI-INFINITE INTERVAL, COMBINE GAMMA
+C     DISTRIBUTION WITH GENERALIZED LAGUERRE-GAUSS QUADRATURE
+C
+10    CONTINUE
+C
+C     CALCULATE PARAMETERS IN GAMMA DISTRIBUTION
+C     FROM MEAN AND VARIANCE OF PHASE
+C
+      ZDIF = AVG-XI
+      BETA = VAR2/ZDIF
+      ALPH = ZDIF/BETA
+      CALL QUADPT(NQ,WT,X,ALPH)
+      CALL GAMGET(ALPH,GA)
+C
+C     CALCULATE PROBABILITY DENSITIES
+C     FOR SET OF QUADRATURE POINTS
+C
+      DO I=1,NQ
+      XQP(I) = XI + X(I)*BETA
+      WFC(I)=WT(I)*X(I)**(ALPH-1.D0)*DEXP(-X(I))/GA
+      ENDDO
+
+C DENSITY FOR EACH QUATURE FRACTION, FOR WOLECULAR WEIGHT DISTRIBUTION
+c100   SUM=0.0D0
+c      DO I=1,NQ
+c      SUM=SUM+WFC(I)*((1.0D0/XQP(I)-0.01D0)+0.909091D0*XQP(I))
+c      ENDDO
+c      COE=(AVG/ADEN-50.0D0)/SUM
+c      DO I=1,NQ
+c      RDEN=COE*(1.0D0/XQP(I)-0.01D0)/XQP(I)+50.0D0/XQP(I)+0.909091D0
+c      DEN(I)=1.0D0/RDEN
+c      ENDDO
+100   SUM=0.0D0
+      DO I=1,NQ
+      SUM=SUM+WFC(I)/XQP(I)
+      ENDDO
+      COE=AVG/ADEN-AVG/1.2d0
+      COE1=(60.971d0-COE)/(1.1604d-2-SUM)
+      COE2=60.971d0-COE1*1.1604d-2
+      DO I=1,NQ
+      RDEN=1.d0/1.2d0+COE2/XQP(I)+COE1/XQP(I)**2
+      DEN(I)=1.0D0/RDEN
+      ENDDO
+      RETURN
+      END
+
+
+C=======================================================================
+C
+C     SUBROUTINE GAMGET
+C
+C     THIS SUBROUTINE EVALUATES THE GAMMA FUNCTION, G, FOR A
+C     SPECIFIED ARGUEMENT, A.
+C
+C     POLYNOMIAL APPROXIMATION FROM ABRAMOWITZ AND STEGUN, "HANDBOOK OF         
+C     MATHEMATICAL FUNCTIONS," DOVER PRESS, 9TH PRINTING, P. 257.               
+C
+C=======================================================================
+      SUBROUTINE GAMGET(A,G)
+      IMPLICIT REAL*8 (A-H,O-Z)
+      Z = A - DINT(A)
+      G=1.D0 + (-.577191652D0 + (.988205891D0 + (-.897056937D0 +
+     *(.918206857D0
+     *+ (-.756704078D0 + (.482199394D0 +
+     *(-.193527818D0 + .035868343D0 *Z) *Z)
+     **Z) *Z) *Z) *Z) *Z) *Z
+  10  ZE = Z + 1.D0
+      IF ((A-ZE) .LT. 0.01D0) GO TO 20
+      G = ZE*G
+      Z=ZE
+      GO TO 10
+  20  RETURN
+      END
+C=======================================================================
+C
+C     SUBROUTINE QUADPT
+C
+C     THIS SUBROUTINE SETS UP ARRAYS OF QUADRATURE POINTS AND
+C     WEIGHTING FACTORS FOR LAGUERRE-GAUSS QUADRATURE.
+C
+C     ARGUMENTS:
+C                  N - NUMBER OF QUADRATURE POINTS
+C                  A - WEIGHTING FACTOR FOR LAGUERRE QUADRATURE
+C                  X - QUADRATURE POINTS
+C               ALPH - ALPHA PARAMETER FOR FEED DISTRIBUTION
+C
+C     REF:   STROUD, A.H.; SECREST, D. "GAUSSIAN QUADRATURE FORMULAS,"
+C            PRENTICE-HALL: ENGLEWOOD CLIFFS, NJ, 1966.
+C
+C=======================================================================
+      SUBROUTINE QUADPT(N,A,X,ALPH)
+      IMPLICIT REAL*8(A-H,O-Z)
+      DIMENSION A(20),X(20),B(20),C(20)
+C
+C     SET CONVERGENCE TOLERANCE FOR NEWTON-RAPHSON ITERATION
+C     FOR ROOTS OF LAGUERRE POLYNOMIALS
+C
+      EPS=1.D-9
+C
+C     DEFINE ALPHA CONSISTENT WITH STROUD AND SECREST
+C
+      ALFA=ALPH-1.D0
+      FNN=FLOAT(N)
+C
+C     SETUP COEFFICIENTS FOR LAGUERRE POLYNOMIALS
+C
+      DO 10 I=1,N
+        FN=FLOAT(I)
+        B(I)=ALFA+2.D0*FN-1.D0
+  10    C(I)=(FN-1.D0)*(ALFA+FN-1.D0)
+      CALL GAMGET(ALFA+1.D0,GAM)
+      CC=GAM
+      DO 20 I=2,N
+  20  CC=CC*C(I)
+      DO 50 I=1,N
+C
+C     ESTIMATE ROOTS OF LAGUERRE POLYNOMIALS
+C
+      IF (I .EQ. 1) THEN
+         XT=(1.D0+ALFA)*(3.D0+0.92D0*ALFA)/(1.D0+2.4D0*FNN+1.8D0*ALFA)
+      ELSEIF (I .EQ. 2) THEN
+         XT=XT+(15.D0+6.25D0*ALFA)/(1.D0+0.9D0*ALFA+2.5D0*FNN)
+      ELSEIF (I .GE. 3) THEN
+         FI=FLOAT(I-2)
+         R1=(1.D0+2.55D0*FI)/(1.9D0*FI)
+         R2=1.26D0*FI*ALFA/(1.D0+3.5D0*FI)
+         RATIO= (R1+R2)/(1.D0+0.3D0*ALFA)
+         XT=XT+RATIO*(XT-X(I-2))
+      ENDIF
+C
+C     SOLVE FOR EXACT VALUE OF ROOTS OF LAGUERRE POLYNOMIALS
+C     USING NEWTON-RAPHSON ITERATION
+C
+      ITER=0
+  30  ITER=ITER+1
+      IF (ITER .GT. 10) THEN
+         WRITE(6,40)
+  40     FORMAT('ITERATIONS EXCEEDED IN LGROOT, EXECUTION CONTINUING')
+         DPN=DP
+         RETURN
+      ENDIF
+C
+C     CALCULATE VALUE OF LAGUERRE POLYNOMIAL AND ITS DERIVATIVE
+C
+      P1=1.D0
+      PP=XT-ALFA-1.D0
+      DP1=0.D0
+      DPP=1.D0
+      DO 45 J=2,N
+      Q=(XT-B(J))*PP - C(J)*P1
+      DQ=(XT-B(J))*DPP + PP - C(J)*DP1
+      P1=PP
+      PP=Q
+      DP1=DPP
+  45  DPP=DQ
+      P=PP
+      DP=DPP
+      PN1=P1
+      D=P/DP
+      XT=XT-D
+C
+C     CHECK FOR CONVERGENCE
+C
+      IF (DABS(D/XT) .GT. EPS) GO TO 30
+C
+C     EXIT ITERATION WITH:
+C           XT  - ZERO OF P-ORDER LAGUERRE POLYNOMIAL
+C           PN1 - VALUE OF P+1 ORDER POLYNOMIAL AT XT
+C           DPN - DERIVATIVE OF LAGUERRE POLYNOMIAL
+C
+      DPN=DP
+      X(I)=XT
+C
+C     CALCULATE WEIGHTING FACTOR
+C
+      A(I)=(CC/(DPN*PN1))*DEXP(XT)*XT**(-ALFA)
+  50  CONTINUE
+      RETURN
+      END
+
+C     THIS SUBROUTINE SETS CRITICAL PROPERTIES OF A PSEUDO-COMPONENT
+C                       USING TWU'S CORRELATION
+C       INPUT
+C              SG: SPECIFIC GRAVITY
+C              Tb: NORMAL BOILING POINT, K
+C              OR
+C              MW: MOLECULAR WEIGHT
+C       OUTPUT
+C              MW(Tb)
+C              TC(K),PC(BAR),VC(CM^3/MOL)
+C=======================================================================
+
+      SUBROUTINE TWU(MW,TB,SG,TC,PC,VC,OMI,denl,Tdenl)
+      implicit real*8 (a-h,o-z)
+      implicit integer (i-n)
+      real*8 MW,MW1,MW2
+
+      IF (SG.LE.0.0D0) THEN
+      DELTA=1.0D-6
+      SG1=0.85d0
+5     CALL critic(Tb,SG1,Tc,Pc,Vc,MW1)
+      F1=(MW1-MW)/MW
+          IF(DABS(F1).LT.1.0D-2) THEN
+          SG=SG1
+          GOTO 15
+          ELSE
+          SG2=SG1+DELTA
+          CALL critic(Tb,SG2,Tc,Pc,Vc,MW2)
+          F2=(MW2-MW)/MW
+          DF=(F2-F1)/DELTA
+          SG1=SG1-F1/DF
+          GOTO 5
+          ENDIF
+      ENDIF
+
+      IF (MW.LE.0.0D0) THEN
+      call critic(Tb,SG,Tc,Pc,Vc,MW)
+      ELSE
+      s1=MW/(4.5673d-5*SG**(-1.10164d0))
+      Tb=(5.d0/9.d0)*s1**(1.d0/2.1962d0)
+      N=1
+10        IF (N.GT.1000) THEN
+          WRITE(*,30)
+          RETURN
+          ELSE
+          ENDIF
+      call critic(Tb,SG,Tc,Pc,Vc,MW1)
+      f1=MW1/MW-1.0d0
+          if (dabs(f1).GE.1.d-3) THEN
+          Tb1=1.0001d0*Tb
+          call critic(Tb1,SG,Tc,Pc,Vc,MW2)
+          f2=MW2/MW-1.0d0
+          df=(f2-f1)/(0.0001d0*Tb)
+          Tb=Tb-f1/df
+          N=N+1
+          goto 10
+          ELSE
+          ENDIF
+      ENDIF
+15    theta=Tb/Tc
+      alpha=-dlog(Pc/1.01325d0)-5.92714+6.09648/theta
+     &      +1.28862*dlog(theta)-0.169347*theta**6
+      beta=15.2518-15.6875/theta-13.4721*dlog(theta)+0.43577*theta**6
+      omi=alpha/beta
+
+c density at 298.15 K from Riazi and Daubert's correlation
+      Tdenl=298.15d0
+      denl=0.982554*(Tb*1.8d0)**0.002016*SG**1.0055
+20    FORMAT(1X,'SG AND TB,OR MW MUST BE GIVEN!')
+30    FORMAT(1X,'BAD INPUT DATA FOR ESTIMATION OF CRITICAL PROPERTIES')
+      end
+
+      subroutine critic(Tb,SG,Tc,Pc,Vc,MW)
+c  Tb: normal boiling point temperature, K;
+c  SG: the specific gravity of the liquid component at 60 0F;
+c  Tc: correlated critical temperature, K;
+c  Pc: correlated critical pressure, bar;
+c  Vc: correlated critical volume, cm^3/mol;
+c  MW: correlated molecular weight, dalton.
+      implicit real*8 (a-h,o-z)
+      implicit integer (i-n)
+      real*8 MW,mw0
+      Tb=Tb*1.8d0
+c convert to R
+
+      Tc0=Tb/(0.533272d0+0.191017d-3*Tb+0.779681d-7*Tb*Tb
+     &    -0.284376d-10*Tb**3+0.959468d28/Tb**13)
+      x=1.d0-Tb/Tc0
+c      write(*,*) Tc0,'Tc0'
+      if (x.lt.0.0d0) then
+      write(*,100)
+      goto 200
+      else
+      endif
+      Vc0=1.d0/(1.0d0-(0.419869d0-0.505839d0*x-1.56436d0*x**3
+     &      -9481.70d0*x**14))**8
+      SG0=0.843593d0-0.128624d0*x-3.36159d0*x**3-13749.5d0*x**12
+      Pc0=(3.83354d0+1.19629d0*dsqrt(x)+34.8888d0*x+36.1952d0*x**2
+     &     +104.193d0*x**4)**2
+      mw0=Tb/(10.44d0-0.0052d0*Tb)
+      if (mw0.lt.0.0d0) then
+      write(*,100)
+      goto 200
+      else
+      endif
+      y=dlog(mw0)
+10    f=dexp(5.71419d0+2.71579d0*y-0.286590d0*y**2-39.8544d0/y
+     &   -0.122488d0/y**2)-24.7522d0*y+35.3155d0*y**2-Tb
+      df=dexp(5.71419d0+2.71579d0*y-0.286590d0*y**2-39.8544d0/y
+     &   -0.122488d0/y**2)*(2.71579d0-2.d0*0.28659d0*y+39.8544d0/y**2
+     &   +2.d0*0.122488d0/y**3)-24.7522d0+2.d0*35.3155d0*y
+      if (dabs(f).gt.1.0d-6) then
+      y=y-f/df
+      goto 10
+      else
+      endif
+      mw0=dexp(y)
+      dSGT=dexp(5.d0*(SG0-SG))-1.d0
+      fT=dSGT*(-0.362456d0/dsqrt(Tb)
+     &         +(0.0398285d0-0.948125d0/dsqrt(Tb))*dSGT)
+      Tc=Tc0*((1.d0+2.d0*fT)/(1.d0-2.d0*fT))**2
+      dSGV=dexp(4.0d0*(SG0**2-SG**2))-1.0d0
+      fV=dSGV*(0.466590d0/dsqrt(Tb)+
+     &        (-0.182421d0+3.01721d0/dsqrt(Tb))*dSGV)
+      Vc=Vc0*((1.d0+2.d0*fV)/(1.d0-2.d0*fV))**2
+      dSGP=dexp(0.5d0*(SG0-SG))-1.0d0
+      fP=dSGP*((2.53262d0-46.1955/dsqrt(Tb)-0.00127885*Tb)
+     & +(-11.4277d0+252.140d0/dsqrt(Tb)+0.00230535*Tb)*dSGP)
+      Pc=Pc0*Tc*Vc0*((1.d0+2.d0*fP)/(1.d0-2.d0*fP))**2/(Tc0*Vc)
+      dSGM=dexp(5.d0*(SG0-SG))-1.0d0
+      xx=dabs(0.0123420d0-0.328086d0/dsqrt(tb))
+      fM=dSGM*(xx+(-0.0175691d0+0.193168d0/dsqrt(Tb))*dSGM)
+      MW=dexp(dlog(mw0)*((1.d0+2.d0*fM)/(1.d0-2.d0*fM))**2)
+      Pc=Pc*6.8947573d-2
+      Vc=Vc*0.062427961d3
+      Tc=Tc*5.d0/9.d0
+      Tb=Tb*5.d0/9.d0
+100   format('2x,It can not be calculated using Twu-correlation!')
+200   return
+      end
+
+      SUBROUTINE broydn(x,n,check)
+      INTEGER n,nn,NP,MAXITS
+      REAL*8 x(n),fvec,EPS,TOLF,TOLMIN,TOLX,STPMX
+      LOGICAL check
+      PARAMETER (NP=128,MAXITS=300,EPS=1.d-4,
+     *TOLF=1.d-3,TOLMIN=1.d-5,
+     *TOLX=EPS,STPMX=100.)
+      COMMON /newtv/ fvec(NP),nn
+CU    USES fdjac,fmin,lnsrch,qrdcmp,qrupdt,rsolv
+      INTEGER i,its,j,k
+      REAL*8 den,f,fold,stpmax,sum,temp,test,
+     *c(NP),d(NP),fvcold(NP),g(NP),
+     *p(NP),qt(NP,NP),r(NP,NP),s(NP),t(NP),w(NP),xold(NP),fmin
+      LOGICAL restrt,sing,skip
+      EXTERNAL fmin
+      nn=n
+      f=fmin(x)
+      test=0.
+      do 11 i=1,n
+        if(dabs(fvec(i)).gt.test)test=dabs(fvec(i))
+11    continue
+      if(test.lt..01*TOLF)return
+      sum=0.
+      do 12 i=1,n
+        sum=sum+x(i)**2
+12    continue
+      stpmax=STPMX*dmax1(dsqrt(sum),dble(n))
+      restrt=.true.
+      do 44 its=1,MAXITS
+        if(restrt)then
+          call fdjac(n,x,fvec,NP,r)
+          call qrdcmp(r,n,NP,c,d,sing)
+          if(sing) pause 'singular Jacobian in broydn'
+          do 14 i=1,n
+            do 13 j=1,n
+              qt(i,j)=0.
+13          continue
+            qt(i,i)=1.
+14        continue
+          do 18 k=1,n-1
+            if(c(k).ne.0.)then
+              do 17 j=1,n
+                sum=0.
+                do 15 i=k,n
+                  sum=sum+r(i,k)*qt(i,j)
+15              continue
+                sum=sum/c(k)
+                do 16 i=k,n
+                  qt(i,j)=qt(i,j)-sum*r(i,k)
+16              continue
+17            continue
+            endif
+18        continue
+          do 21 i=1,n
+            r(i,i)=d(i)
+            do 19 j=1,i-1
+              r(i,j)=0.
+19          continue
+21        continue
+        else
+          do 22 i=1,n
+            s(i)=x(i)-xold(i)
+22        continue
+          do 24 i=1,n
+            sum=0.
+            do 23 j=i,n
+              sum=sum+r(i,j)*s(j)
+23          continue
+            t(i)=sum
+24        continue
+          skip=.true.
+          do 26 i=1,n
+            sum=0.
+            do 25 j=1,n
+              sum=sum+qt(j,i)*t(j)
+25          continue
+            w(i)=fvec(i)-fvcold(i)-sum
+            if(dabs(w(i)).ge.EPS*(dabs(fvec(i))+dabs(fvcold(i))))then
+              skip=.false.
+            else
+              w(i)=0.
+            endif
+26        continue
+          if(.not.skip)then
+            do 28 i=1,n
+              sum=0.
+              do 27 j=1,n
+                sum=sum+qt(i,j)*w(j)
+27            continue
+              t(i)=sum
+28          continue
+            den=0.
+            do 29 i=1,n
+              den=den+s(i)**2
+29          continue
+            do 31 i=1,n
+              s(i)=s(i)/den
+31          continue
+            call qrupdt(r,qt,n,NP,t,s)
+            do 32 i=1,n
+              if(r(i,i).eq.0.) pause 'r singular in broydn'
+              d(i)=r(i,i)
+32          continue
+          endif
+        endif
+        do 34 i=1,n
+          sum=0.
+          do 33 j=1,n
+            sum=sum+qt(i,j)*fvec(j)
+33        continue
+          g(i)=sum
+34      continue
+        do 36 i=n,1,-1
+          sum=0.
+          do 35 j=1,i
+            sum=sum+r(j,i)*g(j)
+35        continue
+          g(i)=sum
+36      continue
+        do 37 i=1,n
+          xold(i)=x(i)
+          fvcold(i)=fvec(i)
+37      continue
+        fold=f
+        do 39 i=1,n
+          sum=0.
+          do 38 j=1,n
+            sum=sum+qt(i,j)*fvec(j)
+38        continue
+          p(i)=-sum
+39      continue
+        call rsolv(r,n,NP,d,p)
+        call lnsrch(n,xold,fold,g,p,x,f,stpmax,check,fmin)
+        test=0.
+        do 41 i=1,n
+          if(dabs(fvec(i)).gt.test)test=dabs(fvec(i))
+41      continue
+        if(test.lt.TOLF)then
+          check=.false.
+          return
+        endif
+        if(check)then
+          if(restrt)then
+            return
+          else
+            test=0.
+            den=dmax1(f,.5d0*dble(n))
+            do 42 i=1,n
+              temp=dabs(g(i))*dmax1(dabs(x(i)),1.d0)/den
+              if(temp.gt.test)test=temp
+42          continue
+            if(test.lt.TOLMIN)then
+              return
+            else
+              restrt=.true.
+            endif
+          endif
+        else
+          restrt=.false.
+          test=0.
+          do 43 i=1,n
+            temp=(dabs(x(i)-xold(i)))/dmax1(dabs(x(i)),1.d0)
+            if(temp.gt.test)test=temp
+43        continue
+          if(test.lt.TOLX)return
+        endif
+44    continue
+      pause 'MAXITS exceeded in broydn'
+      END
+
+      SUBROUTINE fdjac(n,x,fvec,np,df)
+      INTEGER n,np,NMAX
+      REAL*8 df(np,np),fvec(n),x(n),EPS
+      PARAMETER (NMAX=40,EPS=1.d-4)
+CU    USES funcv
+      INTEGER i,j
+      REAL*8 h,temp,f(NMAX)
+      do 12 j=1,n
+        temp=x(j)
+        h=EPS*dabs(temp)
+        if(h.eq.0.)h=EPS
+        x(j)=temp+h
+        h=x(j)-temp
+        call funcv(n,x,f)
+        x(j)=temp
+        do 11 i=1,n
+          df(i,j)=(f(i)-fvec(i))/h
+11      continue
+12    continue
+      return
+      END
+
+      FUNCTION fmin(x)
+      INTEGER n,NP
+      REAL*8 fmin,x(*),fvec
+      PARAMETER (NP=128)
+      COMMON /newtv/ fvec(NP),n
+      SAVE /newtv/
+CU    USES funcv
+      INTEGER i
+      REAL*8 sum
+      call funcv(n,x,fvec)
+      sum=0.
+      do 11 i=1,n
+        sum=sum+fvec(i)**2
+11    continue
+      fmin=0.5*sum
+      return
+      END
+
+      SUBROUTINE lnsrch(n,xold,fold,g,p,x,f,stpmax,check,func)
+      INTEGER n
+      LOGICAL check
+      REAL*8 f,fold,stpmax,g(n),p(n),x(n),xold(n),func,ALF,TOLX
+      PARAMETER (ALF=1.d-4,TOLX=1.d-7)
+      EXTERNAL func
+CU    USES func
+      INTEGER i
+      REAL*8 a,alam,alam2,alamin,b,disc,f2,fold2,rhs1,rhs2,slope,
+     $ sum,temp,test,tmplam
+      check=.false.
+      sum=0.
+      do 11 i=1,n
+        sum=sum+p(i)*p(i)
+11    continue
+      sum=dsqrt(sum)
+      if(sum.gt.stpmax)then
+        do 12 i=1,n
+          p(i)=p(i)*stpmax/sum
+12      continue
+      endif
+      slope=0.
+      do 13 i=1,n
+        slope=slope+g(i)*p(i)
+13    continue
+      test=0.
+      do 14 i=1,n
+        temp=dabs(p(i))/dmax1(dabs(xold(i)),1.d0)
+        if(temp.gt.test)test=temp
+14    continue
+      alamin=TOLX/test
+      alam=1.
+1     continue
+        do 15 i=1,n
+          x(i)=xold(i)+alam*p(i)
+15      continue
+        f=func(x)
+        if(alam.lt.alamin)then
+          do 16 i=1,n
+            x(i)=xold(i)
+16        continue
+          check=.true.
+          return
+        else if(f.le.fold+ALF*alam*slope)then
+          return
+        else
+          if(alam.eq.1.)then
+            tmplam=-slope/(2.*(f-fold-slope))
+          else
+            rhs1=f-fold-alam*slope
+            rhs2=f2-fold2-alam2*slope
+            a=(rhs1/alam**2-rhs2/alam2**2)/(alam-alam2)
+            b=(-alam2*rhs1/alam**2+alam*rhs2/alam2**2)/(alam-alam2)
+            if(a.eq.0.)then
+              tmplam=-slope/(2.*b)
+            else
+              disc=b*b-3.*a*slope
+              tmplam=(-b+dsqrt(dabs(disc)))/(3.*a)
+            endif
+            if(tmplam.gt..5*alam)tmplam=.5*alam
+          endif
+        endif
+        alam2=alam
+        f2=f
+        fold2=fold
+        alam=dmax1(tmplam,.1*alam)
+      goto 1
+      END
+
+      SUBROUTINE qrdcmp(a,n,np,c,d,sing)
+      INTEGER n,np
+      REAL*8 a(np,np),c(n),d(n)
+      LOGICAL sing
+      INTEGER i,j,k
+      REAL*8 scale,sigma,sum,tau
+      sing=.false.
+      scale=0.
+      do 17 k=1,n-1
+        do 11 i=k,n
+          scale=dmax1(scale,dabs(a(i,k)))
+11      continue
+        if(scale.eq.0.)then
+          sing=.true.
+          c(k)=0.
+          d(k)=0.
+        else
+          do 12 i=k,n
+            a(i,k)=a(i,k)/scale
+12        continue
+          sum=0.
+          do 13 i=k,n
+            sum=sum+a(i,k)**2
+13        continue
+          sigma=sign(dsqrt(sum),a(k,k))
+          a(k,k)=a(k,k)+sigma
+          c(k)=sigma*a(k,k)
+          d(k)=-scale*sigma
+          do 16 j=k+1,n
+            sum=0.
+            do 14 i=k,n
+              sum=sum+a(i,k)*a(i,j)
+14          continue
+            tau=sum/c(k)
+            do 15 i=k,n
+              a(i,j)=a(i,j)-tau*a(i,k)
+15          continue
+16        continue
+        endif
+17    continue
+      d(n)=a(n,n)
+      if(d(n).eq.0.)sing=.true.
+      return
+      END
+
+      SUBROUTINE qrupdt(r,qt,n,np,u,v)
+      INTEGER n,np
+      REAL*8 r(np,np),qt(np,np),u(np),v(np)
+CU    USES rotate
+      INTEGER i,j,k
+      do 11 k=n,1,-1
+        if(u(k).ne.0.)goto 1
+11    continue
+      k=1
+1     do 12 i=k-1,1,-1
+        call rotate(r,qt,n,np,i,u(i),-u(i+1))
+        if(u(i).eq.0.)then
+          u(i)=dabs(u(i+1))
+        else if(dabs(u(i)).gt.dabs(u(i+1)))then
+          u(i)=dabs(u(i))*dsqrt(1.+(u(i+1)/u(i))**2)
+        else
+          u(i)=dabs(u(i+1))*dsqrt(1.+(u(i)/u(i+1))**2)
+        endif
+12    continue
+      do 13 j=1,n
+        r(1,j)=r(1,j)+u(1)*v(j)
+13    continue
+      do 14 i=1,k-1
+        call rotate(r,qt,n,np,i,r(i,i),-r(i+1,i))
+14    continue
+      return
+      END
+
+      SUBROUTINE rotate(r,qt,n,np,i,a,b)
+      INTEGER n,np,i
+      REAL*8 a,b,r(np,np),qt(np,np),fake
+      INTEGER j
+      REAL*8 c,fact,s,w,y
+      if(a.eq.0.)then
+        fake = 1
+        c=0.
+        s=sign(fake,b)
+      else if(dabs(a).gt.dabs(b))then
+        fact=b/a
+        c=sign(1./dsqrt(1.+fact**2),a)
+        s=fact*c
+      else
+        fact=a/b
+        s=sign(1./dsqrt(1.+fact**2),b)
+        c=fact*s
+      endif
+      do 11 j=i,n
+        y=r(i,j)
+        w=r(i+1,j)
+        r(i,j)=c*y-s*w
+        r(i+1,j)=s*y+c*w
+11    continue
+      do 12 j=1,n
+        y=qt(i,j)
+        w=qt(i+1,j)
+        qt(i,j)=c*y-s*w
+        qt(i+1,j)=s*y+c*w
+12    continue
+      return
+      END
+
+      SUBROUTINE rsolv(a,n,np,d,b)
+      INTEGER n,np
+      REAL*8 a(np,np),b(n),d(n)
+      INTEGER i,j
+      REAL*8 sum
+      b(n)=b(n)/d(n)
+      do 12 i=n-1,1,-1
+        sum=0.
+        do 11 j=i+1,n
+          sum=sum+a(i,j)*b(j)
+11      continue
+        b(i)=(b(i)-sum)/d(i)
+12    continue
+      return
+      END
+
+
+      SUBROUTINE SACAL(X,LB,UB,XOPT)
+      IMPLICIT INTEGER (I-N)
+      IMPLICIT REAL*8(A-H,O-Z)
+      REAL*8 X,LB,UB,XOPT
+      LOGICAL  MAX
+      PARAMETER (N=2,NEPS=4)
+      DIMENSION X(N),LB(N),UB(N),XOPT(N)
+      DIMENSION C(N),VM(N),FSTAR(NEPS),XP(N),NACP(N)
+      EXTERNAL FCN
+
+      open (15,file='SP.OUT')
+C  Set input parameters.
+      MAX = .FALSE.
+      EPS = 1.0D-8
+      RT = .85
+      ISEED1 = 12438
+      ISEED2 = 22085
+      NS = 20
+      NT = 5
+      MAXEVL = 10000000
+      IPRINT = 0
+
+
+      DO 10, I = 1, N
+      C(I) = 2.0D0
+10    CONTINUE
+
+C  Set input values of the input/output parameters.
+      T = 1.25D0
+      DO I=1,N
+      VM(I) = X(I)/10.0
+      END DO
+
+      WRITE(15,1000) N, MAX, T, RT, EPS, NS, NT, NEPS, MAXEVL, IPRINT,
+     1              ISEED1, ISEED2
+
+      write(*,*) '    RUNNING SIMULATED ANNEALING TO CHECK STABILITY...'
+c      CALL PRTVEC(X,N,'STARTING VALUES')
+c      CALL PRTVEC(VM,N,'INITIAL STEP LENGTH')
+c      CALL PRTVEC(LB,N,'LOWER BOUND')
+c      CALL PRTVEC(UB,N,'UPPER BOUND')
+c      CALL PRTVEC(C,N,'C VECTOR')
+      WRITE(15,'(/,''  ****   END OF DRIVER ROUTINE OUTPUT   ****''
+     1          /,''  ****   BEFORE CALL TO SA.             ****'')')
+
+      CALL SA(N,X,MAX,RT,EPS,NS,NT,NEPS,MAXEVL,LB,UB,C,IPRINT,ISEED1,
+     1        ISEED2,T,VM,XOPT,FOPT,NACC,NFCNEV,NOBDS,IER,
+     2        FSTAR,XP,NACP,FCN)
+
+      WRITE(15,'(/,''  ****   RESULTS AFTER SA   ****   '')')
+c      CALL PRTVEC(XOPT,N,'SOLUTION')
+c      CALL PRTVEC(VM,N,'FINAL STEP LENGTH')
+      WRITE(15,1001) FOPT, NFCNEV, NACC, NOBDS, T, IER
+
+1000  FORMAT(/,' SIMULATED ANNEALING EXAMPLE',/,
+     1       /,' NUMBER OF PARAMETERS: ',I3,'   MAXIMAZATION: ',L5,
+     2       /,' INITIAL TEMP: ', G8.2, '   RT: ',G8.2, '   EPS: ',G8.2,
+     3       /,' NS: ',I3, '   NT: ',I2, '   NEPS: ',I2,
+     4       /,' MAXEVL: ',I10, '   IPRINT: ',I1, '   ISEED1: ',I4,
+     5       '   ISEED2: ',I4)
+1001  FORMAT(/,' OPTIMAL FUNCTION VALUE: ',G20.13
+     1       /,' NUMBER OF FUNCTION EVALUATIONS:     ',I10,
+     2       /,' NUMBER OF ACCEPTED EVALUATIONS:     ',I10,
+     3       /,' NUMBER OF OUT OF BOUND EVALUATIONS: ',I10,
+     4       /,' FINAL TEMP: ', G20.13,'  IER: ', I3)
+
+      RETURN
+      END
+
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+      SUBROUTINE SA(N,X,MAX,RT,EPS,NS,NT,NEPS,MAXEVL,LB,UB,C,IPRINT,
+     1              ISEED1,ISEED2,T,VM,XOPT,FOPT,NACC,NFCNEV,NOBDS,IER,
+     2              FSTAR,XP,NACP,FCN)
+      IMPLICIT REAL*8(A-H,O-Z)
+
+C  Type all external variables.
+      DOUBLE PRECISION  X(*), LB(*), UB(*), C(*), VM(*), FSTAR(*),
+     1                  XOPT(*), XP(*), T, EPS, RT, FOPT
+      INTEGER  NACP(*), N, NS, NT, NEPS, NACC, MAXEVL, IPRINT,
+     1         NOBDS, IER, NFCNEV, ISEED1, ISEED2
+      LOGICAL  MAX
+
+        EXTERNAL FCN
+
+C  Type all internal variables.
+      DOUBLE PRECISION  F, FP, P, PP, RATIO
+      INTEGER  NUP, NDOWN, NREJ, NNEW, LNOBDS, H, I, J, M
+      LOGICAL  QUIT
+
+C  Type all functions.
+      DOUBLE PRECISION  EXPREP
+      REAL  RANMAR
+
+C  Initialize the random number generator RANMAR.
+      CALL RMARIN(ISEED1,ISEED2)
+
+C  Set initial values.
+      NACC = 0
+      NOBDS = 0
+      NFCNEV = 0
+      IER = 99
+
+      DO 10, I = 1, N
+         XOPT(I) = X(I)
+         NACP(I) = 0
+10    CONTINUE
+
+      DO 20, I = 1, NEPS
+         FSTAR(I) = 1.0D+20
+20    CONTINUE
+
+C  If the initial temperature is not positive, notify the user and
+C  return to the calling routine.
+      IF (T .LE. 0.0) THEN
+         write(*,'(/,''  THE INITIAL TEMPERATURE IS NOT POSITIVE. ''
+     1             /,''  RESET THE VARIABLE T. ''/)')
+         IER = 3
+         RETURN
+      END IF
+C       WRITE(*,*)'X(1)=',X(1),' X(2)=',X(2)
+C  If the initial value is out of bounds, notify the user and return
+C  to the calling routine.
+      DO 30, I = 1, N
+         IF ((X(I) .GT. UB(I)) .OR. (X(I) .LT. LB(I))) THEN
+            CALL PRT1
+            IER = 2
+            RETURN
+         END IF
+30    CONTINUE
+
+C  Evaluate the function with input X and return value as F.
+      CALL FCN(N,X,F)
+
+C  If the function is to be minimized, switch the sign of the function.
+C  Note that all intermediate and final output switches the sign back
+C  to eliminate any possible confusion for the user.
+      IF(.NOT. MAX) F = -F
+      NFCNEV = NFCNEV + 1
+      FOPT = F
+      FSTAR(1) = F
+      IF(IPRINT .GE. 1) CALL PRT2(MAX,N,X,F)
+
+C  Start the main loop. Note that it terminates if (i) the algorithm
+C  succesfully optimizes the function or (ii) there are too many
+C  function evaluations (more than MAXEVL).
+100   NUP = 0
+      NREJ = 0
+      NNEW = 0
+      NDOWN = 0
+      LNOBDS = 0
+
+      DO 400, M = 1, NT
+         DO 300, J = 1, NS
+            DO 200, H = 1, N
+
+C  Generate XP, the trial value of X. Note use of VM to choose XP.
+               DO 110, I = 1, N
+                  IF (I .EQ. H) THEN
+                     XP(I) = X(I) + (RANMAR()*2.- 1.) * VM(I)
+                  ELSE
+                     XP(I) = X(I)
+                  END IF
+
+C  If XP is out of bounds, select a point in bounds for the trial.
+                  IF((XP(I) .LT. LB(I)) .OR. (XP(I) .GT. UB(I))) THEN
+                    XP(I) = LB(I) + (UB(I) - LB(I))*RANMAR()
+                    LNOBDS = LNOBDS + 1
+                    NOBDS = NOBDS + 1
+                    IF(IPRINT .GE. 3) CALL PRT3(MAX,N,XP,X,F)
+                  END IF
+110            CONTINUE
+
+C  Evaluate the function with the trial point XP and return as FP.
+               CALL FCN(N,XP,FP)
+               IF(.NOT. MAX) FP = -FP
+               NFCNEV = NFCNEV + 1
+               IF(IPRINT .GE. 3) CALL PRT4(MAX,N,XP,X,FP,F)
+
+C  If too many function evaluations occur, terminate the algorithm.
+               IF(NFCNEV .GE. MAXEVL) THEN
+                  CALL PRT5
+                  IF (.NOT. MAX) FOPT = -FOPT
+                  IER = 1
+                  RETURN
+               END IF
+
+C  Accept the new point if the function value increases.
+               IF(FP .GE. F) THEN
+                  IF(IPRINT .GE. 3) THEN
+                     write(*,'(''  POINT ACCEPTED'')')
+                  END IF
+                  DO 120, I = 1, N
+                     X(I) = XP(I)
+120               CONTINUE
+                  F = FP
+                  NACC = NACC + 1
+                  NACP(H) = NACP(H) + 1
+                  NUP = NUP + 1
+
+C  If greater than any other point, record as new optimum.
+                  IF (FP .GT. FOPT) THEN
+                  IF(IPRINT .GE. 3) THEN
+                     write(*,'(''  NEW OPTIMUM'')')
+                  END IF
+                     DO 130, I = 1, N
+                        XOPT(I) = XP(I)
+130                  CONTINUE
+                     FOPT = FP
+                     NNEW = NNEW + 1
+                  END IF
+
+C  If the point is lower, use the Metropolis criteria to decide on
+C  acceptance or rejection.
+               ELSE
+                  P = EXPREP((FP - F)/T)
+                  PP = RANMAR()
+                  IF (PP .LT. P) THEN
+                     IF(IPRINT .GE. 3) CALL PRT6(MAX)
+                     DO 140, I = 1, N
+                        X(I) = XP(I)
+140                  CONTINUE
+                     F = FP
+                     NACC = NACC + 1
+                     NACP(H) = NACP(H) + 1
+                     NDOWN = NDOWN + 1
+                  ELSE
+                     NREJ = NREJ + 1
+                     IF(IPRINT .GE. 3) CALL PRT7(MAX)
+                  END IF
+               END IF
+
+200         CONTINUE
+300      CONTINUE
+
+C  Adjust VM so that approximately half of all evaluations are accepted.
+         DO 310, I = 1, N
+            RATIO = DFLOAT(NACP(I)) /DFLOAT(NS)
+            IF (RATIO .GT. .6) THEN
+               VM(I) = VM(I)*(1. + C(I)*(RATIO - .6)/.4)
+            ELSE IF (RATIO .LT. .4) THEN
+               VM(I) = VM(I)/(1. + C(I)*((.4 - RATIO)/.4))
+            END IF
+            IF (VM(I) .GT. (UB(I)-LB(I))) THEN
+               VM(I) = UB(I) - LB(I)
+            END IF
+310      CONTINUE
+
+         IF(IPRINT .GE. 2) THEN
+            CALL PRT8(N,VM,XOPT,X)
+         END IF
+
+         DO 320, I = 1, N
+            NACP(I) = 0
+320      CONTINUE
+
+400   CONTINUE
+
+      IF(IPRINT .GE. 1) THEN
+         CALL PRT9(MAX,N,T,XOPT,VM,FOPT,NUP,NDOWN,NREJ,LNOBDS,NNEW)
+      END IF
+
+C  Check termination criteria.
+      QUIT = .FALSE.
+      FSTAR(1) = F
+      IF ((FOPT - FSTAR(1)) .LE. EPS) QUIT = .TRUE.
+      DO 410, I = 1, NEPS
+         IF (DABS(F - FSTAR(I)) .GT. EPS) QUIT = .FALSE.
+410   CONTINUE
+
+C  Terminate SA if appropriate.
+      IF (QUIT) THEN
+         DO 420, I = 1, N
+            X(I) = XOPT(I)
+420      CONTINUE
+         IER = 0
+         IF (.NOT. MAX) FOPT = -FOPT
+         IF(IPRINT .GE. 1) CALL PRT10
+         RETURN
+      END IF
+
+C  If termination criteria is not met, prepare for another loop.
+      T = RT*T
+      DO 430, I = NEPS, 2, -1
+         FSTAR(I) = FSTAR(I-1)
+430   CONTINUE
+      F = FOPT
+      DO 440, I = 1, N
+         X(I) = XOPT(I)
+440   CONTINUE
+
+C  Loop again.
+      GO TO 100
+
+      END
+
+      FUNCTION  EXPREP(RDUM)
+      DOUBLE PRECISION  RDUM, EXPREP
+
+      IF (RDUM .GT. 174.) THEN
+         EXPREP = 3.69D+75
+      ELSE IF (RDUM .LT. -180.) THEN
+         EXPREP = 0.0
+      ELSE
+         EXPREP = DEXP(RDUM)
+      END IF
+
+      RETURN
+      END
+
+      subroutine RMARIN(IJ,KL)
+      real U(97), C, CD, CM
+      integer I97, J97
+      common /raset1/ U, C, CD, CM, I97, J97
+      if( IJ .lt. 0  .or.  IJ .gt. 31328  .or.
+     *    KL .lt. 0  .or.  KL .gt. 30081 ) then
+          print '(A)', ' The first random number seed must have a value
+     *between 0 and 31328'
+          print '(A)',' The second seed must have a value between 0 and
+     *30081'
+            stop
+      endif
+      i = mod(IJ/177, 177) + 2
+      j = mod(IJ    , 177) + 2
+      k = mod(KL/169, 178) + 1
+      l = mod(KL,     169)
+      do 2 ii = 1, 97
+         s = 0.0
+         t = 0.5
+         do 3 jj = 1, 24
+            m = mod(mod(i*j, 179)*k, 179)
+            i = j
+            j = k
+            k = m
+            l = mod(53*l+1, 169)
+            if (mod(l*m, 64) .ge. 32) then
+               s = s + t
+            endif
+            t = 0.5 * t
+3        continue
+         U(ii) = s
+2     continue
+      C = 362436.0 / 16777216.0
+      CD = 7654321.0 / 16777216.0
+      CM = 16777213.0 /16777216.0
+      I97 = 97
+      J97 = 33
+      return
+      end
+
+      function ranmar()
+      REAL U(97), C, CD, CM
+      integer I97, J97
+      common /raset1/ U, C, CD, CM, I97, J97
+         uni = U(I97) - U(J97)
+         if( uni .lt. 0.0 ) uni = uni + 1.0
+         U(I97) = uni
+         I97 = I97 - 1
+         if(I97 .eq. 0) I97 = 97
+         J97 = J97 - 1
+         if(J97 .eq. 0) J97 = 97
+         C = C - CD
+         if( C .lt. 0.0 ) C = C + CM
+         uni = uni - C
+         if( uni .lt. 0.0 ) uni = uni + 1.0
+         RANMAR = uni
+      return
+      END
+
+      SUBROUTINE PRT1
+      write(*,'(/,''  THE STARTING VALUE (X) IS OUTSIDE THE BOUNDS ''
+     1          /,''  (LB AND UB). EXECUTION TERMINATED WITHOUT ANY''
+     2          /,''  OPTIMIZATION. RESPECIFY X, UB OR LB SO THAT  ''
+     3          /,''  LB(I) .LT. X(I) .LT. UB(I), I = 1, N. ''/)')
+
+      RETURN
+      END
+
+      SUBROUTINE PRT2(MAX,N,X,F)
+      DOUBLE PRECISION  X(*), F
+      INTEGER  N
+      LOGICAL  MAX
+
+      write(*,'(''  '')')
+      CALL PRTVEC(X,N,'INITIAL X')
+      IF (MAX) THEN
+         write(*,'(''  INITIAL F: '',/, G25.18)') F
+      ELSE
+         write(*,'(''  INITIAL F: '',/, G25.18)') -F
+      END IF
+
+      RETURN
+      END
+
+      SUBROUTINE PRT3(MAX,N,XP,X,F)
+      DOUBLE PRECISION  XP(*), X(*), F
+      INTEGER  N
+      LOGICAL  MAX
+
+      write(*,'(''  '')')
+      CALL PRTVEC(X,N,'CURRENT X')
+      IF (MAX) THEN
+         write(*,'(''  CURRENT F: '',G25.18)') F
+      ELSE
+         write(*,'(''  CURRENT F: '',G25.18)') -F
+      END IF
+      CALL PRTVEC(XP,N,'TRIAL X')
+      write(*,'(''  POINT REJECTED SINCE OUT OF BOUNDS'')')
+
+      RETURN
+      END
+
+      SUBROUTINE PRT4(MAX,N,XP,X,FP,F)
+      DOUBLE PRECISION  XP(*), X(*), FP, F
+      INTEGER  N
+      LOGICAL  MAX
+
+      write(*,'(''  '')')
+      CALL PRTVEC(X,N,'CURRENT X')
+      IF (MAX) THEN
+         write(*,'(''  CURRENT F: '',G25.18)') F
+         CALL PRTVEC(XP,N,'TRIAL X')
+         write(*,'(''  RESULTING F: '',G25.18)') FP
+      ELSE
+         write(*,'(''  CURRENT F: '',G25.18)') -F
+         CALL PRTVEC(XP,N,'TRIAL X')
+         write(*,'(''  RESULTING F: '',G25.18)') -FP
+      END IF
+
+      RETURN
+      END
+
+      SUBROUTINE PRT5
+      write(*,'(/,''  TOO MANY FUNCTION EVALUATIONS; CONSIDER ''
+     1          /,''  INCREASING MAXEVL OR EPS, OR DECREASING ''
+     2          /,''  NT OR RT. THESE RESULTS ARE LIKELY TO BE ''
+     3          /,''  POOR.'',/)')
+
+      RETURN
+      END
+
+      SUBROUTINE PRT6(MAX)
+      LOGICAL  MAX
+
+      IF (MAX) THEN
+         write(*,'(''  THOUGH LOWER, POINT ACCEPTED'')')
+      ELSE
+         write(*,'(''  THOUGH HIGHER, POINT ACCEPTED'')')
+      END IF
+
+      RETURN
+      END
+
+      SUBROUTINE PRT7(MAX)
+      LOGICAL  MAX
+
+      IF (MAX) THEN
+         write(*,'(''  LOWER POINT REJECTED'')')
+      ELSE
+         write(*,'(''  HIGHER POINT REJECTED'')')
+      END IF
+
+      RETURN
+      END
+
+      SUBROUTINE PRT8(N,VM,XOPT,X)
+      DOUBLE PRECISION  VM(*), XOPT(*), X(*)
+      INTEGER  N
+
+      write(*,'(/,
+     1  '' INTERMEDIATE RESULTS AFTER STEP LENGTH ADJUSTMENT'',/)')
+      CALL PRTVEC(VM,N,'NEW STEP LENGTH (VM)')
+      CALL PRTVEC(XOPT,N,'CURRENT OPTIMAL X')
+      CALL PRTVEC(X,N,'CURRENT X')
+      write(*,'('' '')')
+
+      RETURN
+      END
+
+      SUBROUTINE PRT9(MAX,N,T,XOPT,VM,FOPT,NUP,NDOWN,NREJ,LNOBDS,NNEW)
+      DOUBLE PRECISION  XOPT(*), VM(*), T, FOPT
+      INTEGER  N, NUP, NDOWN, NREJ, LNOBDS, NNEW, TOTMOV
+      LOGICAL  MAX
+
+      TOTMOV = NUP + NDOWN + NREJ
+
+      write(*,'(/,
+     1  '' INTERMEDIATE RESULTS BEFORE NEXT TEMPERATURE REDUCTION'',/)')
+      write(*,'(''  CURRENT TEMPERATURE:            '',G12.5)') T
+      IF (MAX) THEN
+         write(*,'(''  MAX FUNCTION VALUE SO FAR:  '',G25.18)') FOPT
+         write(*,'(''  TOTAL MOVES:                '',I8)') TOTMOV
+         write(*,'(''     UPHILL:                  '',I8)') NUP
+         write(*,'(''     ACCEPTED DOWNHILL:       '',I8)') NDOWN
+         write(*,'(''     REJECTED DOWNHILL:       '',I8)') NREJ
+         write(*,'(''  OUT OF BOUNDS TRIALS:       '',I8)') LNOBDS
+         write(*,'(''  NEW MAXIMA THIS TEMPERATURE:'',I8)') NNEW
+      ELSE
+         write(*,'(''  MIN FUNCTION VALUE SO FAR:  '',G25.18)') -FOPT
+         write(*,'(''  TOTAL MOVES:                '',I8)') TOTMOV
+         write(*,'(''     DOWNHILL:                '',I8)')  NUP
+         write(*,'(''     ACCEPTED UPHILL:         '',I8)')  NDOWN
+         write(*,'(''     REJECTED UPHILL:         '',I8)')  NREJ
+         write(*,'(''  TRIALS OUT OF BOUNDS:       '',I8)')  LNOBDS
+         write(*,'(''  NEW MINIMA THIS TEMPERATURE:'',I8)')  NNEW
+      END IF
+      CALL PRTVEC(XOPT,N,'CURRENT OPTIMAL X')
+      CALL PRTVEC(VM,N,'STEP LENGTH (VM)')
+      write(*,'('' '')')
+
+      RETURN
+      END
+      SUBROUTINE PRT10
+      write(*,'(/,''  SA ACHIEVED TERMINATION CRITERIA. IER = 0. '',/)')
+
+      RETURN
+      END
+
+      SUBROUTINE PRTVEC(VECTOR,NCOLS,NAME)
+      INTEGER NCOLS
+      DOUBLE PRECISION VECTOR(NCOLS)
+      CHARACTER *(*) NAME
+
+      write(*,1001) NAME
+
+      IF (NCOLS .GT. 10) THEN
+         LINES = INT(NCOLS/10.)
+
+         DO 100, I = 1, LINES
+            LL = 10*(I - 1)
+            write(*,1000) (VECTOR(J),J = 1+LL, 10+LL)
+  100    CONTINUE
+
+         write(*,1000) (VECTOR(J),J = 11+LL, NCOLS)
+      ELSE
+         write(*,1000) (VECTOR(J),J = 1, NCOLS)
+      END IF
+
+ 1000 FORMAT( 10(G12.5,1X))
+ 1001 FORMAT(/,25X,A)
+
+      RETURN
+      END
+
+
+
+
+
+
